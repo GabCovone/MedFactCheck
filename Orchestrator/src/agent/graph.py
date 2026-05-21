@@ -23,7 +23,8 @@ if src_path not in sys.path:
 from agent.utils.Qwen import *
 from agent.utils.DeBERTa import *
 from agent.utils.ClaimDecompositionFunc import *
-from agent.utils.ReasoningVeracityFunc import *
+from agent.utils.ReasoningFunc import *
+from agent.utils.VeracityFunc import *
 from agent.utils.RetrievalFunc import *
 from agent.utils.Storage import *
 
@@ -54,12 +55,17 @@ class State(TypedDict):
     retrieved_docs: NotRequired[Dict[str, str]]
 
     # Output from reasoning node
-    reasoning_output: NotRequired[str]
+    reasoning_input_checked: NotRequired[bool]
+    reasoning_output: NotRequired[Dict[str, str]]
+    reasoning_checked: NotRequired[bool]
     reasoning_model: NotRequired[str]
     retrieval_models: NotRequired[str]
 
     # Final output from veracity node
-    veracity: NotRequired[str]
+    veracity_input_checked: NotRequired[bool]
+    veracity_results: NotRequired[Dict[str, dict]]
+    veracity_checked: NotRequired[bool]
+    verdicts_saved: NotRequired[bool]
     veracity_model: NotRequired[str]
     
     # Output from db init
@@ -106,18 +112,6 @@ def check_save_decomposition_branch(state: State) -> str:
     print("-> Errore nel salvataggio, termino il flusso.")
     return "end"
 
-async def init_db(state: State) -> Dict[str, Any]:
-    """Inizializza e verifica la connessione al database MongoDB."""
-    print("--- INIT DATABASE ---")
-    try:
-        storage = StorageManager()
-        storage.close()
-        print("✅ Connessione al database MongoDB verificata con successo.")
-        return {"db_initialized": True}
-    except Exception as e:
-        print(f"❌ Errore di connessione al database MongoDB: {e}")
-        return {"db_initialized": False}
-
 
 async def save_decomposition_node(state: State) -> Dict[str, Any]:
     """Salva i risultati della decomposizione nel database MongoDB usando StorageManager."""
@@ -161,24 +155,58 @@ async def retrieve_evidence(state: State) -> Dict[str, Any]:
     print("Retrieved evidence for sub-claims.")
     return {"retrieved_docs": retrieved_docs}
 
+def check_reasoning_input_branch(state: State) -> str:
+    """Determina se l'input per il reasoning è valido."""
+    if state.get("reasoning_input_checked"):
+        print("-> Input per il reasoning valido, procedo con la generazione della CoT.")
+        return "continue"
+    print("-> Errore nell'input del reasoning, termino il flusso.")
+    return "end"
 
-async def reason_on_evidence(state: State) -> Dict[str, Any]:
-    """Reasons over the retrieved evidence to evaluate the sub-claims."""
-    print(f"--- REASONING ON EVIDENCE (using {state.get('reasoning_model', 'Unknown')}) ---")
-    # Placeholder logic: Call the reasoning model (e.g., Qwen).
-    reasoning_output = "Reasoning complete. The evidence appears to support the claims."
-    print(reasoning_output)
-    return {"reasoning_output": reasoning_output}
+def check_reasoning_branch(state: State) -> str:
+    """Determina se il ragionamento ha prodotto risultati validi."""
+    if state.get("reasoning_checked"):
+        print("-> Ragionamento valido, procedo con la classificazione della veridicità.")
+        return "continue"
+    print("-> Errore nel ragionamento, termino il flusso.")
+    return "end"
 
+def check_veracity_input_branch(state: State) -> str:
+    """Determina se l'input per la veracity è valido."""
+    if state.get("veracity_input_checked"):
+        print("-> Input per la veracity valido, procedo con la classificazione.")
+        return "continue"
+    print("-> Errore nell'input della veracity, termino il flusso.")
+    return "end"
 
-async def determine_veracity(state: State) -> Dict[str, Any]:
-    """Determines the final veracity of the main claim."""
-    # model_info = await init_veracity(state) # Rimosso, ora è un nodo separato
-    print(f"--- DETERMINING VERACITY (using {state.get('veracity_model', 'Unknown')}) ---")
-    # Placeholder logic: Call the veracity model (e.g., BioBERTa).
-    veracity = "Fact-check result: Largely True"
-    print(veracity)
-    return {"veracity": veracity}
+def check_veracity_branch(state: State) -> str:
+    """Determina se la classificazione della veridicità ha prodotto risultati validi."""
+    if state.get("veracity_checked"):
+        print("-> Veridicità valutata, procedo con il salvataggio dei verdetti.")
+        return "continue"
+    print("-> Errore nella valutazione della veridicità, termino il flusso.")
+    return "end"
+
+async def save_verdicts_node(state: State) -> Dict[str, Any]:
+    """Salva i verdetti di tutti i sub-claims e aggrega il verdetto finale nel database."""
+    print("--- SAVING VERDICTS TO STORAGE ---")
+    try:
+        storage = StorageManager()
+        claim_id = state.get("claim_id")
+        veracity_results = state.get("veracity_results", {})
+        
+        for sc, veracity_output in veracity_results.items():
+            storage.save_verdict(claim_id=claim_id, veracity_output=veracity_output)
+        
+        # Esegue anche l'aggregazione finale richiesta dal Coordinator Agent
+        storage.aggregate_final_verdict(claim_id=claim_id, agent_trace=[])
+        
+        storage.close()
+        print("✅ Tutti i verdetti sono stati salvati e il claim è completato.")
+        return {"verdicts_saved": True}
+    except Exception as e:
+        print(f"❌ Errore durante il salvataggio dei verdetti: {e}")
+        return {"verdicts_saved": False}
 
 async def join_init(state: State) -> None:
     """Nodo di giunzione dopo l'inizializzazione parallela."""
@@ -193,7 +221,6 @@ workflow = StateGraph(State)
 workflow.add_node("init_qwen_istance", init_qwen_istance)
 workflow.add_node("init_retrieval", init_retrieval)
 workflow.add_node("init_deberta_istance", init_deberta_istance)
-workflow.add_node("init_veracity", init_veracity)
 workflow.add_node("init_db", init_db)
 
 workflow.add_node("join_init", join_init)
@@ -205,18 +232,20 @@ workflow.add_node("save_decomposition", save_decomposition_node)
 # Aggiungi i nodi di elaborazione principali
 workflow.add_node("decompose", run_decomposition)
 workflow.add_node("retrieve", retrieve_evidence)
-workflow.add_node("reason", reason_on_evidence)
-workflow.add_node("veracity", determine_veracity)
+workflow.add_node("reasoning_input_check", reasoning_input_check)
+workflow.add_node("reason", run_reasoning)
+workflow.add_node("veracity_input_check", veracity_input_check)
+workflow.add_node("veracity", run_veracity)
+workflow.add_node("save_verdicts", save_verdicts_node)
 
 # 1. Esegui i nodi di inizializzazione in parallelo partendo da __start__
 workflow.add_edge("__start__", "init_qwen_istance")
 workflow.add_edge("__start__", "init_retrieval")
-workflow.add_edge("__start__", "init_veracity")
 workflow.add_edge("__start__", "init_deberta_istance")
 workflow.add_edge("__start__", "init_db")
 
 # 2. Ricongiungi i rami paralleli al nodo `join_init`
-workflow.add_edge(["init_qwen_istance", "init_retrieval", "init_deberta_istance", "init_veracity", "init_db"], "join_init")
+workflow.add_edge(["init_qwen_istance", "init_retrieval", "init_deberta_istance", "init_db"], "join_init")
 
 # 3. Aggiungi il branch condizionale dopo l'inizializzazione
 workflow.add_conditional_edges(
@@ -245,8 +274,33 @@ workflow.add_conditional_edges(
     check_save_decomposition_branch,
     {"continue": "retrieve", "end": "__end__"}
 )
-workflow.add_edge("retrieve", "reason")
-workflow.add_edge("reason", "veracity")
-workflow.add_edge("veracity", "__end__")
+
+workflow.add_edge("retrieve", "reasoning_input_check")
+
+workflow.add_conditional_edges(
+    "reasoning_input_check",
+    check_reasoning_input_branch,
+    {"continue": "reason", "end": "__end__"}
+)
+
+workflow.add_conditional_edges(
+    "reason",
+    check_reasoning_branch,
+    {"continue": "veracity_input_check", "end": "__end__"}
+)
+
+workflow.add_conditional_edges(
+    "veracity_input_check",
+    check_veracity_input_branch,
+    {"continue": "veracity", "end": "__end__"}
+)
+
+workflow.add_conditional_edges(
+    "veracity",
+    check_veracity_branch,
+    {"continue": "save_verdicts", "end": "__end__"}
+)
+
+workflow.add_edge("save_verdicts", "__end__")
 
 graph = workflow.compile(name="Medical Fact-Checking Graph")
