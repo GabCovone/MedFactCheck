@@ -20,6 +20,8 @@ src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if src_path not in sys.path:
     sys.path.append(src_path)
 
+from agent.utils.Qwen import *
+from agent.utils.DeBERTa import *
 from agent.utils.ClaimDecompositionFunc import *
 from agent.utils.ReasoningVeracityFunc import *
 from agent.utils.RetrievalFunc import *
@@ -116,30 +118,6 @@ async def init_db(state: State) -> Dict[str, Any]:
         print(f"❌ Errore di connessione al database MongoDB: {e}")
         return {"db_initialized": False}
 
-async def run_decomposition(state: State) -> Dict[str, Any]:
-    """
-    Esegue la decomposizione del claim utilizzando l'agente caricato
-    e l'input preparato dal nodo `input_to_json`.
-    """
-    print("--- RUNNING CLAIM DECOMPOSITION ---")
-    try:
-        decomposer_agent = state["decomposition_model"]
-        prepared_input = state["decomposition_input"]
-        
-        decomposition_result = decomposer_agent.decompose(**prepared_input)
-        print("Decomposition output received.")
-
-        sub_claims_list = [sc["claim"] for sc in decomposition_result.get("sub_claims", [])]
-        routing_info_dict = {sc["claim"]: sc["routes"] for sc in decomposition_result.get("sub_claims", [])}
-        decomposer_reasoning = decomposition_result.get("reasoning", "")
-        return {
-            "sub_claims": sub_claims_list, 
-            "routing_info": routing_info_dict, 
-            "decomposer_reasoning": decomposer_reasoning
-        }
-    except Exception as e:
-        print(f"❌ Errore durante l'esecuzione della decomposizione: {e}")
-        return {"sub_claims": [], "routing_info": {}}
 
 async def save_decomposition_node(state: State) -> Dict[str, Any]:
     """Salva i risultati della decomposizione nel database MongoDB usando StorageManager."""
@@ -186,7 +164,6 @@ async def retrieve_evidence(state: State) -> Dict[str, Any]:
 
 async def reason_on_evidence(state: State) -> Dict[str, Any]:
     """Reasons over the retrieved evidence to evaluate the sub-claims."""
-    # model_info = await init_reasoning(state) # Rimosso, ora è un nodo separato
     print(f"--- REASONING ON EVIDENCE (using {state.get('reasoning_model', 'Unknown')}) ---")
     # Placeholder logic: Call the reasoning model (e.g., Qwen).
     reasoning_output = "Reasoning complete. The evidence appears to support the claims."
@@ -213,9 +190,9 @@ async def join_init(state: State) -> None:
 workflow = StateGraph(State)
 
 # Aggiungi i nodi che verranno eseguiti in parallelo
-workflow.add_node("init_decomposition", init_decomposition)
+workflow.add_node("init_qwen_istance", init_qwen_istance)
 workflow.add_node("init_retrieval", init_retrieval)
-workflow.add_node("init_reasoning", init_reasoning)
+workflow.add_node("init_deberta_istance", init_deberta_istance)
 workflow.add_node("init_veracity", init_veracity)
 workflow.add_node("init_db", init_db)
 
@@ -232,14 +209,14 @@ workflow.add_node("reason", reason_on_evidence)
 workflow.add_node("veracity", determine_veracity)
 
 # 1. Esegui i nodi di inizializzazione in parallelo partendo da __start__
-workflow.add_edge("__start__", "init_decomposition")
+workflow.add_edge("__start__", "init_qwen_istance")
 workflow.add_edge("__start__", "init_retrieval")
-workflow.add_edge("__start__", "init_reasoning")
 workflow.add_edge("__start__", "init_veracity")
+workflow.add_edge("__start__", "init_deberta_istance")
 workflow.add_edge("__start__", "init_db")
 
 # 2. Ricongiungi i rami paralleli al nodo `join_init`
-workflow.add_edge(["init_decomposition", "init_retrieval", "init_reasoning", "init_veracity", "init_db"], "join_init")
+workflow.add_edge(["init_qwen_istance", "init_retrieval", "init_deberta_istance", "init_veracity", "init_db"], "join_init")
 
 # 3. Aggiungi il branch condizionale dopo l'inizializzazione
 workflow.add_conditional_edges(
