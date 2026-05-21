@@ -1,0 +1,8 @@
+langgraph
+torch
+transformers
+bitsandbytes
+accelerate
+requests
+beautifulsoup4
+Pillow
