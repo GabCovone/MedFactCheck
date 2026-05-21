@@ -21,21 +21,35 @@ async def run_veracity(state: Dict[str, Any]) -> Dict[str, Any]:
     print("--- DETERMINING VERACITY ---")
     try:
         # veracity_agent = state.get("veracity_model")
+        veracity_agent = state.get("veracity_model")
         sub_claims = state.get("sub_claims", [])
         reasoning_output = state.get("reasoning_output", {})
+        retrieved_docs = state.get("retrieved_docs", {})
         
         veracity_results = {}
         
         for sc in sub_claims:
             cot = reasoning_output.get(sc, "")
-            # Placeholder: Qui chiamerai il modello DeBERTa passandogli claim + CoT
+            docs = retrieved_docs.get(sc, [])
+
+            # Normalizzazione provvisoria per compatibilità col mockup del retrieval
+            if isinstance(docs, str):
+                docs = [{"testo": docs, "source": "Placeholder"}]
+                
+            # Chiamata al metodo reale della classe DebertaVeracityNode
+            final_label, score = veracity_agent.assess_veracity(
+                sub_claim=sc,
+                evidence_list=docs,
+                reasoning_text=cot
+            )
+
             # Costruiamo il dizionario esattamente come se lo aspetta StorageManager.save_verdict()
             veracity_results[sc] = {
                 "claim": sc,
-                "verdict": "Supported", 
-                "confidence_score": 0.854,
+                "verdict": final_label, 
+                "confidence_score": score,
                 "chain_of_thought_log": cot,
-                "supporting_evidence": []
+                "supporting_evidence": docs
             }
             
         print(f"✅ Calcolato verdetto per {len(veracity_results)} sub-claims.")

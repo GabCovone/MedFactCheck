@@ -28,12 +28,16 @@ async def run_reasoning(state: Dict[str, Any]) -> Dict[str, Any]:
         
         # Iteriamo su ogni sub-claim per generare il ragionamento
         for sc in sub_claims:
-            # Placeholder: Qui chiamerai il modello Qwen passando il sub-claim e le evidenze
-            docs = retrieved_docs.get(sc, "Nessuna evidenza trovata.")
-            reasoning_outputs[sc] = (
-                f"Sulla base dell'evidenza recuperata '{docs}', si evidenzia un allineamento "
-                f"parziale/totale con i concetti espressi nel claim."
-            )
+            docs = retrieved_docs.get(sc, [])
+            
+            # Siccome il retrieval al momento è mockato e restituisce stringhe in graph.py,
+            # lo normalizziamo in una lista di dizionari come si aspetta la classe Qwen
+            if isinstance(docs, str):
+                docs = [{"text": docs, "source": "Placeholder"}]
+                
+            # Chiamata al metodo reale della classe QwenNF4
+            cot = reasoning_agent.reason(sub_claim=sc, evidence_list=docs)
+            reasoning_outputs[sc] = cot
             
         print(f"✅ Generata Chain-of-Thought per {len(reasoning_outputs)} sub-claims.")
         return {"reasoning_output": reasoning_outputs, "reasoning_checked": True}
