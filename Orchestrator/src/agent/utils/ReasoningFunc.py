@@ -20,7 +20,7 @@ async def run_reasoning(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     print("--- RUNNING REASONING ON EVIDENCE ---")
     try:
-        # reasoning_agent = state.get("reasoning_model")
+        reasoning_agent = state.get("reasoning_model")
         sub_claims = state.get("sub_claims", [])
         retrieved_docs = state.get("retrieved_docs", {})
         
