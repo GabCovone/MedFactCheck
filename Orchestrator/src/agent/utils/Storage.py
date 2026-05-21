@@ -29,7 +29,7 @@ except ConnectionFailure as e:
 import hashlib
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from pymongo import MongoClient, ASCENDING, DESCENDING
 from pymongo.collection import Collection
@@ -496,3 +496,16 @@ class StorageManager:
 
 
 print("✅ Classe StorageManager definita.")
+
+
+async def init_db(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Inizializza e verifica la connessione al database MongoDB."""
+    print("--- INIT DATABASE ---")
+    try:
+        storage = StorageManager()
+        storage.close()
+        print("✅ Connessione al database MongoDB verificata con successo.")
+        return {"db_initialized": True}
+    except Exception as e:
+        print(f"❌ Errore di connessione al database MongoDB: {e}")
+        return {"db_initialized": False}
