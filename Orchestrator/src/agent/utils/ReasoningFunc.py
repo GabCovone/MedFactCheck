@@ -35,8 +35,24 @@ async def run_reasoning(state: Dict[str, Any]) -> Dict[str, Any]:
             if isinstance(docs, str):
                 docs = [{"text": docs, "source": "Placeholder"}]
                 
-            # Chiamata al metodo reale della classe QwenNF4
-            cot = reasoning_agent.reason(sub_claim=sc, evidence_list=docs)
+            # Inferenza gerarchica iterativa: divisione in batch di max 4 documenti
+            batch_size = 4
+            current_docs = docs
+            level = 1
+            
+            # Riduciamo i documenti finché non sono <= batch_size
+            while len(current_docs) > batch_size:
+                intermediate_docs = []
+                for i in range(0, len(current_docs), batch_size):
+                    batch = current_docs[i:i + batch_size]
+                    batch_cot = reasoning_agent.reason(sub_claim=sc, evidence_list=batch)
+                    intermediate_docs.append({"text": batch_cot, "source": f"Intermediate Analysis L{level}-{i//batch_size + 1}"})
+                current_docs = intermediate_docs
+                level += 1
+                
+            # Ragionamento finale (o unica inferenza diretta se i documenti erano già <= 4)
+            cot = reasoning_agent.reason(sub_claim=sc, evidence_list=current_docs)
+            
             reasoning_outputs[sc] = cot
             
         print(f"✅ Generata Chain-of-Thought per {len(reasoning_outputs)} sub-claims.")
