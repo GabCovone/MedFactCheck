@@ -13,6 +13,17 @@ async def reasoning_input_check(state: Dict[str, Any]) -> Dict[str, Any]:
         print("❌ Check fallito: Input per il reasoning mancante o non valido.")
         return {"reasoning_input_checked": False}
 
+async def reasoning_output_check(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Controlla che il ragionamento abbia prodotto risultati validi."""
+    print("--- CHECKING REASONING OUTPUT ---")
+    reasoning_output = state.get("reasoning_output")
+    if reasoning_output and isinstance(reasoning_output, dict) and len(reasoning_output) > 0:
+        print(f"✅ Check superato: Ragionamento generato per {len(reasoning_output)} sub-claims.")
+        return {"reasoning_checked": True}
+    else:
+        print("❌ Check fallito: Generazione del ragionamento fallita o vuota.")
+        return {"reasoning_checked": False}
+
 async def run_reasoning(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     Esegue il modello di ragionamento sui sub-claims e i documenti recuperati
@@ -56,7 +67,7 @@ async def run_reasoning(state: Dict[str, Any]) -> Dict[str, Any]:
             reasoning_outputs[sc] = cot
             
         print(f"✅ Generata Chain-of-Thought per {len(reasoning_outputs)} sub-claims.")
-        return {"reasoning_output": reasoning_outputs, "reasoning_checked": True}
+        return {"reasoning_output": reasoning_outputs}
     except Exception as e:
         print(f"❌ Errore durante il ragionamento: {e}")
-        return {"reasoning_output": {}, "reasoning_checked": False}
+        return {"reasoning_output": {}}

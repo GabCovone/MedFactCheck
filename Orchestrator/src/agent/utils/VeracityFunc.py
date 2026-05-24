@@ -1,17 +1,15 @@
 from typing import Dict, Any
 
-async def veracity_input_check(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Controlla che i dati necessari per la veracity (sub_claims e reasoning_output) siano presenti."""
-    print("--- CHECKING VERACITY INPUT ---")
-    sub_claims = state.get("sub_claims")
-    reasoning_output = state.get("reasoning_output")
-    
-    if sub_claims and isinstance(sub_claims, list) and isinstance(reasoning_output, dict):
-        print("✅ Check superato: Input valido per la classificazione di veridicità.")
-        return {"veracity_input_checked": True}
+async def veracity_output_check(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Controlla che la valutazione della veridicità abbia prodotto risultati validi."""
+    print("--- CHECKING VERACITY OUTPUT ---")
+    veracity_results = state.get("veracity_results")
+    if veracity_results and isinstance(veracity_results, dict) and len(veracity_results) > 0:
+        print(f"✅ Check superato: Verdetti calcolati per {len(veracity_results)} sub-claims.")
+        return {"veracity_checked": True}
     else:
-        print("❌ Check fallito: Input per la veracity mancante o non valido.")
-        return {"veracity_input_checked": False}
+        print("❌ Check fallito: Nessun verdetto calcolato, impossibile procedere.")
+        return {"veracity_checked": False}
 
 async def run_veracity(state: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -53,7 +51,7 @@ async def run_veracity(state: Dict[str, Any]) -> Dict[str, Any]:
             }
             
         print(f"✅ Calcolato verdetto per {len(veracity_results)} sub-claims.")
-        return {"veracity_results": veracity_results, "veracity_checked": True}
+        return {"veracity_results": veracity_results}
     except Exception as e:
         print(f"❌ Errore durante il calcolo della veridicità: {e}")
-        return {"veracity_results": {}, "veracity_checked": False}
+        return {"veracity_results": {}}

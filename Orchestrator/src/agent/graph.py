@@ -62,7 +62,6 @@ class State(TypedDict):
     retrieval_models: NotRequired[str]
 
     # Final output from veracity node
-    veracity_input_checked: NotRequired[bool]
     veracity_results: NotRequired[Dict[str, dict]]
     veracity_checked: NotRequired[bool]
     verdicts_saved: NotRequired[bool]
@@ -171,14 +170,6 @@ def check_reasoning_branch(state: State) -> str:
     print("-> Errore nel ragionamento, termino il flusso.")
     return "end"
 
-def check_veracity_input_branch(state: State) -> str:
-    """Determina se l'input per la veracity è valido."""
-    if state.get("veracity_input_checked"):
-        print("-> Input per la veracity valido, procedo con la classificazione.")
-        return "continue"
-    print("-> Errore nell'input della veracity, termino il flusso.")
-    return "end"
-
 def check_veracity_branch(state: State) -> str:
     """Determina se la classificazione della veridicità ha prodotto risultati validi."""
     if state.get("veracity_checked"):
@@ -234,8 +225,9 @@ workflow.add_node("decompose", run_decomposition)
 workflow.add_node("retrieve", retrieve_evidence)
 workflow.add_node("reasoning_input_check", reasoning_input_check)
 workflow.add_node("reason", run_reasoning)
-workflow.add_node("veracity_input_check", veracity_input_check)
+workflow.add_node("reasoning_output_check", reasoning_output_check)
 workflow.add_node("veracity", run_veracity)
+workflow.add_node("veracity_output_check", veracity_output_check)
 workflow.add_node("save_verdicts", save_verdicts_node)
 
 # 1. Esegui i nodi di inizializzazione in parallelo partendo da __start__
@@ -283,20 +275,18 @@ workflow.add_conditional_edges(
     {"continue": "reason", "end": "__end__"}
 )
 
-workflow.add_conditional_edges(
-    "reason",
-    check_reasoning_branch,
-    {"continue": "veracity_input_check", "end": "__end__"}
-)
+workflow.add_edge("reason", "reasoning_output_check")
 
 workflow.add_conditional_edges(
-    "veracity_input_check",
-    check_veracity_input_branch,
+    "reasoning_output_check",
+    check_reasoning_branch,
     {"continue": "veracity", "end": "__end__"}
 )
 
+workflow.add_edge("veracity", "veracity_output_check")
+
 workflow.add_conditional_edges(
-    "veracity",
+    "veracity_output_check",
     check_veracity_branch,
     {"continue": "save_verdicts", "end": "__end__"}
 )
