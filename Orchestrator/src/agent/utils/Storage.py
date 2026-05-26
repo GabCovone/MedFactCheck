@@ -3,15 +3,8 @@ from pymongo import MongoClient, ASCENDING, DESCENDING
 from pymongo.errors import ConnectionFailure
 
 # ── URI di connessione ────────────────────────────────────────────────────
-# Opzione 1: da variabile d'ambiente / Colab Secrets
-try:
-    from google.colab import userdata
-    MONGO_URI = userdata.get("MONGO_URI")
-    print("✅ URI caricata da Colab Secrets.")
-except Exception:
-    # Opzione 2: inserisci direttamente qui
-    MONGO_URI = "mongodb://localhost:27017/"  # ← sostituisci con Atlas URI se necessario
-    print(f"⚠️  URI impostata manualmente: {MONGO_URI}")
+MONGO_URI = "mongodb://localhost:27017/"
+print(f"✅ URI impostata su locale: {MONGO_URI}")
 
 DB_NAME = "medfactcheck"
 
@@ -102,33 +95,51 @@ class StorageManager:
     # Input: output di ClaimsProcessing (QwenNF4Decomposer.decompose())
     # ═══════════════════════════════════════════════════════════════════════════
 
-    def save_claim_decomposition(
+    def save_claim(
         self,
         original_text: str,
-        decomposer_output: dict,
         source_type: str = "text"
     ) -> str:
         """
-        Salva il claim originale e i suoi sub-claims con routing.
+        Salva il claim originale nello stato iniziale 'received'.
 
         Args:
-            original_text    : testo grezzo inviato dal Decomposer
-            decomposer_output: dizionario restituito da QwenNF4Decomposer.decompose()
-                               Struttura attesa:
-                               {
-                                 "reasoning": "...",
-                                 "sub_claims": [
-                                   {"claim": "...", "routes": ["kb"]},
-                                   {"claim": "...", "routes": ["kb", "lit"]}
-                                 ]
-                               }
-            source_type      : "text" | "url" | "image"
+            original_text: testo grezzo del claim
+            source_type  : "text" | "url" | "image"
 
         Returns:
             claim_id (str)
         """
         claim_id  = self._make_claim_id(original_text)
-        timestamp = self._now()
+        
+        document = {
+            "claim_id"      : claim_id,
+            "original_text" : original_text,
+            "source_type"   : source_type,
+            "timestamp"     : self._now(),
+            "status"        : "received"
+        }
+        
+        self.claims.update_one(
+            {"claim_id": claim_id},
+            {"$set": document},
+            upsert=True
+        )
+        print(f"💾 [claims] Inizializzato claim '{claim_id}'")
+        return claim_id
+
+    def save_claim_decomposition(
+        self,
+        claim_id: str,
+        decomposer_output: dict
+    ) -> str:
+        """
+        Aggiorna il claim esistente con i risultati della decomposizione.
+
+        Args:
+            claim_id         : ID del claim da aggiornare
+            decomposer_output: dizionario restituito da QwenNF4Decomposer.decompose()
+        """
 
         # Arricchiamo ogni sub-claim con un hash univoco e metadati
         sub_claims_enriched = []
@@ -140,23 +151,19 @@ class StorageManager:
                 "verdict_ready" : False   # diventa True dopo Reasoning_Veracity
             })
 
-        document = {
-            "claim_id"      : claim_id,
-            "original_text" : original_text,
-            "source_type"   : source_type,
+        update_data = {
             "decomposer_reasoning": decomposer_output.get("reasoning", ""),
             "sub_claims"    : sub_claims_enriched,
             "n_sub_claims"  : len(sub_claims_enriched),
-            "timestamp"     : timestamp,
-            "status"        : "decomposed"  # decomposed → retrieved → verified → done
+            "status"        : "decomposed",
+            "last_updated"  : self._now()
         }
 
         self.claims.update_one(
             {"claim_id": claim_id},
-            {"$set": document},
-            upsert=True
+            {"$set": update_data}
         )
-        print(f"💾 [claims] Salvato '{claim_id}' — {len(sub_claims_enriched)} sub-claim/s")
+        print(f"💾 [claims] Aggiornata decomposizione per '{claim_id}' — {len(sub_claims_enriched)} sub-claim/s")
         return claim_id
 
     def get_claim(self, claim_id: str) -> Optional[dict]:
@@ -214,7 +221,11 @@ class StorageManager:
 
         docs_to_insert = []
         for p in passages:
-            evidence_id = f"ev_{claim_id}_{sub_claim_hash}_{p.get('doc_id','?')[:8]}"
+            # Il retriever ora fornisce 'text', 'source' e 'score', non 'doc_id'. Usiamo l'hash del testo.
+            passage_text = p.get("text") or p.get("abstract") or p.get("testo", "")
+            passage_hash = hashlib.md5(passage_text.encode()).hexdigest()[:8]
+            evidence_id = f"ev_{claim_id}_{sub_claim_hash}_{passage_hash}"
+            
             doc = {
                 "evidence_id"       : evidence_id,
                 "claim_id"          : claim_id,
@@ -228,7 +239,7 @@ class StorageManager:
                 "doi"               : p.get("doi", ""),
                 "pmcid"             : p.get("pmcid", ""),
                 "title"             : p.get("title", ""),
-                "testo"             : p.get("text") or p.get("abstract") or p.get("testo", ""),
+                "testo"             : passage_text,
                 "authors"           : p.get("authors", ""),
                 "journal"           : p.get("journal", ""),
                 "year"              : p.get("year", ""),
@@ -236,7 +247,7 @@ class StorageManager:
                 "url"               : p.get("url", ""),
                 # — score di retrieval —
                 "rrf_score"         : p.get("rrf_score", 0.0),
-                "relevance_score"   : p.get("relevance_score", None),
+                "relevance_score"   : p.get("score", p.get("relevance_score", None)),
                 "verdict_direction" : p.get("verdict_direction", "neutral"),
                 "evidence_type"     : p.get("evidence_type", "other"),
                 "key_finding"       : p.get("key_finding", ""),

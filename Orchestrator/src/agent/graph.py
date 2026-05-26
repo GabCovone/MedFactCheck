@@ -1,6 +1,7 @@
-"""LangGraph single-node graph template.
+"""MedFactCheck Main Graph Orchestrator.
 
-Returns a predefined response. Replace logic and configuration as needed.
+Defines the state graph and nodes for claim decomposition, evidence retrieval,
+reasoning generation, and final veracity classification.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from agent.utils.ReasoningFunc import *
 from agent.utils.VeracityFunc import *
 from agent.utils.RetrievalFunc import *
 from agent.utils.Storage import *
+from agent.utils.Retriever import *
 
 class State(TypedDict):
     """Input state for the agent.
@@ -38,6 +40,7 @@ class State(TypedDict):
     # Input claim from the user
     claim_input: dict 
     claim_id: NotRequired[str]
+    claim_saved: NotRequired[bool]
     
     # Output from decomposition node
     decomposition_input: NotRequired[Dict[str, Any ]]
@@ -52,10 +55,11 @@ class State(TypedDict):
 
 
     # Output from retrieval node
-    retrieved_docs: NotRequired[Dict[str, str]]
+    retrieved_docs: NotRequired[Dict[str, Any]]
+    evidence_saved: NotRequired[bool]
+    retrieval_output_checked: NotRequired[bool]
 
     # Output from reasoning node
-    reasoning_input_checked: NotRequired[bool]
     reasoning_output: NotRequired[Dict[str, str]]
     reasoning_checked: NotRequired[bool]
     reasoning_model: NotRequired[str]
@@ -65,6 +69,7 @@ class State(TypedDict):
     veracity_results: NotRequired[Dict[str, dict]]
     veracity_checked: NotRequired[bool]
     verdicts_saved: NotRequired[bool]
+    final_result: NotRequired[Dict[str, Any]]
     veracity_model: NotRequired[str]
     
     # Output from db init
@@ -86,6 +91,43 @@ def check_init_branch(state: State) -> str:
         missing = [check for check in required_checks if not state.get(check)]
         print(f"❌ Errore: Inizializzazione fallita per i seguenti componenti: {missing}. Termino il flusso.")
         return "end"
+
+def check_save_claim_branch(state: State) -> str:
+    """Determina se il salvataggio iniziale del claim ha avuto successo."""
+    if state.get("claim_saved"):
+        print("-> Claim iniziale salvato, procedo con la validazione dell'input.")
+        return "continue"
+    print("-> Errore nel salvataggio iniziale del claim, termino il flusso.")
+    return "end"
+
+async def save_claim_node(state: State) -> Dict[str, Any]:
+    """Salva il claim originale all'inizio del flusso."""
+    print("--- SAVING INITIAL CLAIM TO STORAGE ---")
+    try:
+        storage = StorageManager()
+        claim_input = state.get("claim_input")
+        
+        if not claim_input or not isinstance(claim_input, dict):
+            print("❌ Input non valido per il salvataggio.")
+            return {"claim_saved": False}
+            
+        original_text = claim_input.get("text", "")
+        
+        source_type = "text"
+        if claim_input.get("image"):
+            source_type = "image"
+        
+        # Inizializziamo il record per generare il claim_id e lo status received
+        claim_id = storage.save_claim(
+            original_text=original_text,
+            source_type=source_type
+        )
+        
+        storage.close()
+        return {"claim_id": claim_id, "claim_saved": True}
+    except Exception as e:
+        print(f"❌ Errore durante il salvataggio iniziale del claim: {e}")
+        return {"claim_saved": False}
 
 def check_json_branch(state: State) -> str:
     """Determina se la preparazione dell'input ha avuto successo."""
@@ -128,13 +170,12 @@ async def save_decomposition_node(state: State) -> Dict[str, Any]:
             "sub_claims": [{"claim": sc, "routes": routing_info.get(sc, [])} for sc in sub_claims_list]
         }
         
-        original_text = state.get("claim_input", {}).get("text", "")
+        claim_id = state.get("claim_id")
         
-        # Salva a database
-        claim_id = storage.save_claim_decomposition(
-            original_text=original_text,
-            decomposer_output=decomposer_output,
-            source_type="text"
+        # Aggiorna il record a database
+        storage.save_claim_decomposition(
+            claim_id=claim_id,
+            decomposer_output=decomposer_output
         )
         storage.close()
         return {"claim_id": claim_id}
@@ -142,24 +183,43 @@ async def save_decomposition_node(state: State) -> Dict[str, Any]:
         print(f"❌ Errore durante il salvataggio della decomposizione: {e}")
         return {}
 
-async def retrieve_evidence(state: State) -> Dict[str, Any]:
-    """Retrieves evidence for sub-claims based on the routing info."""
-    # model_info = await init_retrieval(state) # Rimosso, ora è un nodo separato
-    print(f"--- RETRIEVING EVIDENCE (using {state.get('retrieval_models', 'Unknown')}) ---")
-    # Placeholder logic: Here you would implement the retrieval from KB (BM25) and LIT (BM25 + BioBERT).
-    retrieved_docs = {
-        "sub_claim_1": "Evidence from BM25 on local KB.",
-        "sub_claim_2": "Evidence from BM25 (KB) and BioBERT (LIT).",
-    }
-    print("Retrieved evidence for sub-claims.")
-    return {"retrieved_docs": retrieved_docs}
-
-def check_reasoning_input_branch(state: State) -> str:
-    """Determina se l'input per il reasoning è valido."""
-    if state.get("reasoning_input_checked"):
-        print("-> Input per il reasoning valido, procedo con la generazione della CoT.")
+def check_save_evidence_branch(state: State) -> str:
+    """Determina se il salvataggio delle evidenze ha avuto successo."""
+    if state.get("evidence_saved"):
+        print("-> Evidenze salvate, procedo con il reasoning.")
         return "continue"
-    print("-> Errore nell'input del reasoning, termino il flusso.")
+    print("-> Errore nel salvataggio delle evidenze, termino il flusso.")
+    return "end"
+
+async def save_evidence_node(state: State) -> Dict[str, Any]:
+    """Salva le evidenze recuperate nel database MongoDB usando StorageManager."""
+    print("--- SAVING EVIDENCE TO STORAGE ---")
+    try:
+        storage = StorageManager()
+        claim_id = state.get("claim_id")
+        retrieved_docs = state.get("retrieved_docs", {})
+        
+        for sc, docs in retrieved_docs.items():
+            retriever_output = {
+                "claim_id": claim_id,
+                "claim": sc,
+                "evidence_passages": docs
+            }
+            storage.save_evidence(claim_id=claim_id, retriever_output=retriever_output)
+        
+        storage.update_claim_status(claim_id, "retrieved")
+        storage.close()
+        return {"evidence_saved": True}
+    except Exception as e:
+        print(f"❌ Errore durante il salvataggio delle evidenze: {e}")
+        return {"evidence_saved": False}
+
+def check_retrieval_output_branch(state: State) -> str:
+    """Determina se l'output del retrieval è valido."""
+    if state.get("retrieval_output_checked"):
+        print("-> Output del retrieval valido, procedo con il salvataggio delle evidenze.")
+        return "continue"
+    print("-> Errore nell'output del retrieval, termino il flusso.")
     return "end"
 
 def check_reasoning_branch(state: State) -> str:
@@ -190,14 +250,40 @@ async def save_verdicts_node(state: State) -> Dict[str, Any]:
             storage.save_verdict(claim_id=claim_id, veracity_output=veracity_output)
         
         # Esegue anche l'aggregazione finale richiesta dal Coordinator Agent
-        storage.aggregate_final_verdict(claim_id=claim_id, agent_trace=[])
+        final_doc = storage.aggregate_final_verdict(claim_id=claim_id, agent_trace=[])
         
         storage.close()
         print("✅ Tutti i verdetti sono stati salvati e il claim è completato.")
-        return {"verdicts_saved": True}
+        return {"verdicts_saved": True, "final_result": final_doc}
     except Exception as e:
         print(f"❌ Errore durante il salvataggio dei verdetti: {e}")
         return {"verdicts_saved": False}
+
+def check_save_verdicts_branch(state: State) -> str:
+    """Determina se il salvataggio dei verdetti ha avuto successo."""
+    if state.get("verdicts_saved"):
+        return "continue"
+    print("-> Errore nel salvataggio dei verdetti, termino il flusso.")
+    return "end"
+
+async def print_final_result_node(state: State) -> Dict[str, Any]:
+    """Stampa a schermo il riepilogo finale del fact-checking."""
+    final_result = state.get("final_result", {})
+    if not final_result:
+        print("⚠️ Nessun risultato finale disponibile per la stampa.")
+        return {}
+        
+    print("\n" + "="*60)
+    print("🏆 RISULTATO FINALE DEL FACT-CHECKING 🏆".center(60))
+    print("="*60)
+    print(f"🔹 CLAIM: {final_result.get('original_text')}")
+    print(f"🔹 VERDETTO: {final_result.get('final_verdict')}")
+    print(f"🔹 CONFIDENZA MEDIA: {final_result.get('avg_confidence', 0.0):.2%}")
+    print("\n🔹 DETTAGLIO SUB-CLAIMS:")
+    for sc in final_result.get('sub_verdicts', []):
+        print(f"   [{sc.get('verdict')}] (Conf: {sc.get('confidence_score', 0.0):.2%}) -> {sc.get('sub_claim')}")
+    print("="*60 + "\n")
+    return {}
 
 async def join_init(state: State) -> None:
     """Nodo di giunzione dopo l'inizializzazione parallela."""
@@ -209,40 +295,49 @@ async def join_init(state: State) -> None:
 workflow = StateGraph(State)
 
 # Aggiungi i nodi che verranno eseguiti in parallelo
-workflow.add_node("init_qwen_istance", init_qwen_istance)
+workflow.add_node("init_qwen_instance", init_qwen_instance)
 workflow.add_node("init_retrieval", init_retrieval)
-workflow.add_node("init_deberta_istance", init_deberta_istance)
+workflow.add_node("init_deberta_instance", init_deberta_instance)
 workflow.add_node("init_db", init_db)
 
 workflow.add_node("join_init", join_init)
+workflow.add_node("save_claim", save_claim_node)
 workflow.add_node("input_to_json", input_to_json)
 workflow.add_node("decompose_subclaims_check", decompose_subclaims_check)
 workflow.add_node("save_decomposition", save_decomposition_node)
 
+workflow.add_node("save_evidence", save_evidence_node)
 
 # Aggiungi i nodi di elaborazione principali
 workflow.add_node("decompose", run_decomposition)
 workflow.add_node("retrieve", retrieve_evidence)
-workflow.add_node("reasoning_input_check", reasoning_input_check)
+workflow.add_node("retrieval_output_check", retrieval_output_check)
 workflow.add_node("reason", run_reasoning)
 workflow.add_node("reasoning_output_check", reasoning_output_check)
 workflow.add_node("veracity", run_veracity)
 workflow.add_node("veracity_output_check", veracity_output_check)
 workflow.add_node("save_verdicts", save_verdicts_node)
+workflow.add_node("print_final_result", print_final_result_node)
 
 # 1. Esegui i nodi di inizializzazione in parallelo partendo da __start__
-workflow.add_edge("__start__", "init_qwen_istance")
+workflow.add_edge("__start__", "init_qwen_instance")
 workflow.add_edge("__start__", "init_retrieval")
-workflow.add_edge("__start__", "init_deberta_istance")
+workflow.add_edge("__start__", "init_deberta_instance")
 workflow.add_edge("__start__", "init_db")
 
 # 2. Ricongiungi i rami paralleli al nodo `join_init`
-workflow.add_edge(["init_qwen_istance", "init_retrieval", "init_deberta_istance", "init_db"], "join_init")
+workflow.add_edge(["init_qwen_instance", "init_retrieval", "init_deberta_instance", "init_db"], "join_init")
 
 # 3. Aggiungi il branch condizionale dopo l'inizializzazione
 workflow.add_conditional_edges(
     "join_init",
     check_init_branch,
+    {"continue": "save_claim", "end": "__end__"}
+)
+
+workflow.add_conditional_edges(
+    "save_claim",
+    check_save_claim_branch,
     {"continue": "input_to_json", "end": "__end__"}
 )
 
@@ -267,11 +362,17 @@ workflow.add_conditional_edges(
     {"continue": "retrieve", "end": "__end__"}
 )
 
-workflow.add_edge("retrieve", "reasoning_input_check")
+workflow.add_edge("retrieve", "retrieval_output_check")
 
 workflow.add_conditional_edges(
-    "reasoning_input_check",
-    check_reasoning_input_branch,
+    "retrieval_output_check",
+    check_retrieval_output_branch,
+    {"continue": "save_evidence", "end": "__end__"}
+)
+
+workflow.add_conditional_edges(
+    "save_evidence",
+    check_save_evidence_branch,
     {"continue": "reason", "end": "__end__"}
 )
 
@@ -291,6 +392,12 @@ workflow.add_conditional_edges(
     {"continue": "save_verdicts", "end": "__end__"}
 )
 
-workflow.add_edge("save_verdicts", "__end__")
+workflow.add_conditional_edges(
+    "save_verdicts",
+    check_save_verdicts_branch,
+    {"continue": "print_final_result", "end": "__end__"}
+)
+
+workflow.add_edge("print_final_result", "__end__")
 
 graph = workflow.compile(name="Medical Fact-Checking Graph")

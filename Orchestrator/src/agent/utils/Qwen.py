@@ -67,12 +67,50 @@ class QwenNF4(Base_Qwen):
 
     # AGGIUNTO 'self' QUI!
     def build_qwen_few_shot_prompt(self, user_text: str, image_path: str = None) -> list:
-        system_prompt = """Sei uno script di estrazione dati MULTIMODALE e AUTOMATICO... (testo omesso per brevità, tieni il tuo)"""
+        system_prompt = """Sei uno script di estrazione dati MULTIMODALE e AUTOMATICO. Puoi analizzare sia testo che immagini. Il tuo unico scopo è estrarre un array di proposizioni dichiarative indipendenti (Soggetto + Verbo + Oggetto).
+        NON sei un assistente conversazionale. NON scusarti, NON dialogare e NON fare domande. Restituisci SEMPRE e SOLO il JSON valido. Se rifiuti di analizzare, lo script andrà in crash.
+
+        REGOLE SINTATTICHE (CRITICHE):
+        1. COMPLETEZZA: Estrai TUTTI i claim medici, chimici o scientifici rilevanti dal testo o dai contenuti dell'immagine.
+        2. ANEDDOTI E FAKE NEWS: Scarta rigorosamente le narrazioni personali ("Mio cugino ha preso..."). Tuttavia, se la frase nasconde una teoria medica (es. "X è la cura definitiva!"), ESTRAI QUELLA TEORIA in modo neutrale.
+        3. RISOLUZIONE DEL SOGGETTO: I pronomi o i soggetti sottintesi devono essere esplicitati.
+        4. REASONING BREVE: Il campo "reasoning" deve essere di MASSIMO 15 PAROLE per evitare errori di formattazione.
+
+        REGOLE DI CLASSIFICAZIONE (ROUTING) - LEGGERE ATTENTAMENTE:
+        - Assegna ["kb"] SOLO alle frasi che descrivono definizioni biologiche/chimiche, tassonomia, composizione o proprietà puramente statiche (es. "X è un ormone", "L'aspirina è un farmaco", "X contiene Y", "X ha una massa di Z").
+        - Assegna ["kb", "lit"] a TUTTE le altre frasi che descrivono cause, correlazioni, azioni, effetti clinici, cure o eventi (es. "X altera Y", "X riduce Z", "X è la causa di Y").
+
+        FORMATO DI OUTPUT:
+        {
+        "reasoning": "Breve logica...",
+        "sub_claims": [
+            {
+            "claim": "Frase completa e indipendente",
+            "routes": ["..."]
+            }
+        ]
+        }"""
         
         messages = [
-            {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
-            # ... tieni qui tutti i tuoi esempi few-shot ...
-        ]
+        # Inizializziamo il System Prompt
+        {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
+
+        # ESEMPIO 1: Routing base
+        {"role": "user", "content": [{"type": "text", "text": "TITOLO: La radice magica. PUNTO 1: Contiene molta vitamina C. PUNTO 2: Cura il cancro ai polmoni in una settimana."}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "{\n  \"reasoning\": \"Punto 1 composizione (kb). Punto 2 azione estrema (kb, lit). Soggetto risolto.\",\n  \"sub_claims\": [\n    {\n      \"claim\": \"La radice magica contiene molta vitamina C.\",\n      \"routes\": [\"kb\"]\n    },\n    {\n      \"claim\": \"La radice magica cura il cancro ai polmoni in una settimana.\",\n      \"routes\": [\"kb\", \"lit\"]\n    }\n  ]\n}"}]},
+
+        # ESEMPIO 2: Eliminazione metodologie
+        {"role": "user", "content": [{"type": "text", "text": "Uno studio dimostra che mangiare aglio altera i batteri intestinali. Ricordiamo che l'aglio è un bulbo."}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "{\n  \"reasoning\": \"Scarto la metodologia. Estraggo l'azione (kb, lit) e la definizione statica (kb).\",\n  \"sub_claims\": [\n    {\n      \"claim\": \"Mangiare aglio altera i batteri intestinali.\",\n      \"routes\": [\"kb\", \"lit\"]\n    },\n    {\n      \"claim\": \"L'aglio è un bulbo.\",\n      \"routes\": [\"kb\"]\n    }\n  ]\n}"}]},
+
+        # ESEMPIO 3: Gestione severa di Aneddoti e Fake News mischiate (Questo risolve il Test 2)
+        {"role": "user", "content": [{"type": "text", "text": "Mio nonno mangiava sempre la terra e il giorno dopo stava bene. I medici mentono, la terra è la cura definitiva! Ricordate che la terra contiene minerali."}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "{\n  \"reasoning\": \"Scarto aneddoto del nonno. Estraggo claim medico estremo (kb, lit) e composizione (kb).\",\n  \"sub_claims\": [\n    {\n      \"claim\": \"La terra è la cura definitiva.\",\n      \"routes\": [\"kb\", \"lit\"]\n    },\n    {\n      \"claim\": \"La terra contiene minerali.\",\n      \"routes\": [\"kb\"]\n    }\n  ]\n}"}]},
+
+        # ESEMPIO 4: Routing per classificazioni farmaceutiche (Questo risolve il Test 6)
+        {"role": "user", "content": [{"type": "text", "text": "L'ibuprofene è un antinfiammatorio non steroideo. Riduce drasticamente il dolore articolare."}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "{\n  \"reasoning\": \"Estraggo classificazione farmacologica (kb) e azione clinica (kb, lit).\",\n  \"sub_claims\": [\n    {\n      \"claim\": \"L'ibuprofene è un antinfiammatorio non steroideo.\",\n      \"routes\": [\"kb\"]\n    },\n    {\n      \"claim\": \"L'ibuprofene riduce drasticamente il dolore articolare.\",\n      \"routes\": [\"kb\", \"lit\"]\n    }\n  ]\n}"}]}
+    ]
 
         user_content = []
         if image_path:
@@ -204,6 +242,6 @@ class QwenNF4(Base_Qwen):
     
 
 
-async def init_qwen_istance():
+async def init_qwen_instance(state: Dict[str, Any]) -> Dict[str, Any]:
     qwen_instance = QwenNF4()
-    return qwen_instance
+    return {"decomposition_model": qwen_instance, "reasoning_model": qwen_instance}

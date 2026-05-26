@@ -1,6 +1,6 @@
 import torch
 import gc
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from transformers import pipeline
 
 class DebertaVeracityNode:
@@ -88,6 +88,6 @@ class DebertaVeracityNode:
         }
 
 
-async def init_deberta_istance():
-    deberta_istance = DebertaVeracityNode()
-    return deberta_istance
+async def init_deberta_instance(state: Dict[str, Any]) -> Dict[str, Any]:
+    deberta_instance = DebertaVeracityNode()
+    return {"veracity_model": deberta_instance}

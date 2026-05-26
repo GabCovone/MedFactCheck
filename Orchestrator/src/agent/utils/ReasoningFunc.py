@@ -1,18 +1,5 @@
 from typing import Dict, Any
 
-async def reasoning_input_check(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Controlla che i dati necessari per il reasoning (sub_claims e documenti) siano presenti."""
-    print("--- CHECKING REASONING INPUT ---")
-    sub_claims = state.get("sub_claims")
-    retrieved_docs = state.get("retrieved_docs")
-    
-    if sub_claims and isinstance(sub_claims, list) and isinstance(retrieved_docs, dict):
-        print(f"✅ Check superato: Input valido per {len(sub_claims)} sub-claims.")
-        return {"reasoning_input_checked": True}
-    else:
-        print("❌ Check fallito: Input per il reasoning mancante o non valido.")
-        return {"reasoning_input_checked": False}
-
 async def reasoning_output_check(state: Dict[str, Any]) -> Dict[str, Any]:
     """Controlla che il ragionamento abbia prodotto risultati validi."""
     print("--- CHECKING REASONING OUTPUT ---")
@@ -41,11 +28,6 @@ async def run_reasoning(state: Dict[str, Any]) -> Dict[str, Any]:
         for sc in sub_claims:
             docs = retrieved_docs.get(sc, [])
             
-            # Siccome il retrieval al momento è mockato e restituisce stringhe in graph.py,
-            # lo normalizziamo in una lista di dizionari come si aspetta la classe Qwen
-            if isinstance(docs, str):
-                docs = [{"text": docs, "source": "Placeholder"}]
-                
             # Inferenza gerarchica iterativa: divisione in batch di max 4 documenti
             batch_size = 4
             current_docs = docs

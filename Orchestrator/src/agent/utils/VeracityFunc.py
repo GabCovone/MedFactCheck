@@ -18,7 +18,6 @@ async def run_veracity(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     print("--- DETERMINING VERACITY ---")
     try:
-        # veracity_agent = state.get("veracity_model")
         veracity_agent = state.get("veracity_model")
         sub_claims = state.get("sub_claims", [])
         reasoning_output = state.get("reasoning_output", {})
@@ -30,11 +29,6 @@ async def run_veracity(state: Dict[str, Any]) -> Dict[str, Any]:
             cot = reasoning_output.get(sc, "")
             docs = retrieved_docs.get(sc, [])
 
-            # Normalizzazione provvisoria per compatibilità col mockup del retrieval
-            if isinstance(docs, str):
-                docs = [{"testo": docs, "source": "Placeholder"}]
-                
-            # Chiamata al metodo reale della classe DebertaVeracityNode
             final_label, score = veracity_agent.assess_veracity(
                 sub_claim=sc,
                 evidence_list=docs,
