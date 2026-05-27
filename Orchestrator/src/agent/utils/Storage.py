@@ -26,6 +26,7 @@ from typing import Any, Dict, Optional
 
 from pymongo import MongoClient, ASCENDING, DESCENDING
 from pymongo.collection import Collection
+from langchain_core.messages import AIMessage
 
 
 class StorageManager:

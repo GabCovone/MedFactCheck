@@ -1,12 +1,11 @@
 from abc import ABC, abstractmethod
+from io import BytesIO
+import requests
 import torch
 import json
-import requests
 import gc
-from bs4 import BeautifulSoup
-from urllib.parse import urlparse
+from PIL import Image
 from typing import Dict, Any, Optional
-from qwen_vl_utils import process_vision_info
 
 # IMPORTAZIONE CORRETTA PER QWEN 2.5
 from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor, BitsAndBytesConfig
@@ -14,11 +13,19 @@ from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor, Bits
 # Decomposer Agent
 class Base_Qwen(ABC):
     @abstractmethod
-    def decompose(self, text_input: str) -> Optional[Dict[str, Any]]:
+    def decompose(self, text_input: str, image_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
         pass
 
     @abstractmethod
-    def reason(self, text_input: str) -> Optional[Dict[str, Any]]:
+    def reason(self, sub_claim: str, evidence_list: list) -> str:
+        pass
+
+    @abstractmethod
+    def supervise(self, messages_history: str) -> str:
+        pass
+
+    @abstractmethod
+    def decide_tool(self, task_context: str, available_tools: list) -> str:
         pass
 
 class QwenNF4(Base_Qwen):
@@ -41,31 +48,6 @@ class QwenNF4(Base_Qwen):
         )
         print("Modello Multimodale caricato e pronto!")
 
-    def _is_url(self, text: str) -> bool:
-        try:
-            result = urlparse(text)
-            return all([result.scheme, result.netloc])
-        except ValueError:
-            return False
-
-    def _scrape_text_from_url(self, url: str) -> str:
-        print(f"Scraping del contenuto da: {url}...")
-        try:
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64 AppleWebKit/537.36)'}
-            response = requests.get(url, headers=headers, timeout=10)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.content, 'html.parser')
-
-            for script in soup(["script", "style", "nav", "footer", "header"]):
-                script.extract()
-
-            text = soup.get_text(separator=' ', strip=True)
-            return text[:4000] + ("..." if len(text) > 4000 else "")
-        except Exception as e:
-            print(f"Errore nello scraping URL: {e}")
-            return f"Errore: Impossibile leggere {url}"
-
-    # AGGIUNTO 'self' QUI!
     def build_qwen_few_shot_prompt(self, user_text: str, image_path: str = None) -> list:
         system_prompt = """Sei uno script di estrazione dati MULTIMODALE e AUTOMATICO. Puoi analizzare sia testo che immagini. Il tuo unico scopo è estrarre un array di proposizioni dichiarative indipendenti (Soggetto + Verbo + Oggetto).
         NON sei un assistente conversazionale. NON scusarti, NON dialogare e NON fare domande. Restituisci SEMPRE e SOLO il JSON valido. Se rifiuti di analizzare, lo script andrà in crash.
@@ -121,30 +103,42 @@ class QwenNF4(Base_Qwen):
         return messages
 
     def decompose(self, text_input: str, image_path: str = None) -> dict:
-        if self._is_url(text_input):
-            text_to_process = self._scrape_text_from_url(text_input)
-            print("Testo estratto dall'URL con successo.")
-        else:
-            text_to_process = text_input
-
         # 1. Costruzione dei messaggi
-        messages = self.build_qwen_few_shot_prompt(text_to_process, image_path)
+        messages = self.build_qwen_few_shot_prompt(text_input, image_path)
 
-        # 2. Template e Vision Info (Codice uniformato e pulito!)
+        # 2. Template
         text_with_template = self.processor.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
-        image_inputs, video_inputs = process_vision_info(messages)
 
-        inputs = self.processor(
-            text=[text_with_template],
-            images=image_inputs,
-            videos=video_inputs,
-            padding=True,
-            return_tensors="pt"
-        ).to(self.model.device)
+        # 3. Gestione Immagine (Sblocco server, fix PNG trasparenti, BytesIO per URL)
+        if image_path:
+            print(f"Caricamento immagine da: {image_path}...")
+            try:
+                # Controlla se è un URL o un file locale
+                if image_path.startswith("http://") or image_path.startswith("https://"):
+                    headers = {'User-Agent': 'Mozilla/5.0'}
+                    img_response = requests.get(image_path, headers=headers, timeout=15)
+                    img_response.raise_for_status()
+                    image = Image.open(BytesIO(img_response.content)).convert("RGB")
+                else:
+                    image = Image.open(image_path).convert("RGB")
 
-        # 3. Generazione
+                inputs = self.processor(
+                    text=[text_with_template],
+                    images=[image],
+                    padding=True,
+                    return_tensors="pt"
+                ).to(self.model.device)
+            except Exception as e:
+                print(f"Errore caricamento immagine: {e}")
+                # Fallback in caso di errore di download o apertura
+                inputs = self.processor(text=[text_with_template], padding=True, return_tensors="pt").to(self.model.device)
+        else:
+            # Gestione input solo testuale
+            inputs = self.processor(text=[text_with_template], padding=True, return_tensors="pt").to(self.model.device)
+
+        # 4. Generazione
         with torch.no_grad():
             generated_ids = self.model.generate(
                 **inputs,
@@ -187,44 +181,43 @@ class QwenNF4(Base_Qwen):
             return parsed_json
         except json.JSONDecodeError as e:
             print(f"ERRORE DI PARSING JSON: {e}")
+            print(f"Testo grezzo generato:\n{raw_text}")
             return {"sub_claims": []}
         
-    def reason(self, sub_claim, evidence_list, image_path=None):
+    def reason(self, sub_claim: str, evidence_list: list) -> str:
         evidence_text = "\n".join([f"- {e['text']} (Fonte: {e['source']})" for e in evidence_list])
 
-        prompt_text = f"""Sei un esperto di fact-checking biomedico. Analizza il seguente claim basandoti sulle evidenze fornite e sull'immagine allegata.
-        Genera un ragionamento passo-passo (Chain-of-Thought)...
-        CLAIM: {sub_claim}
-        EVIDENZE SCIENTIFICHE:
+        prompt_text = f"""Sei un esperto analista biomedico incaricato di validare affermazioni scientifiche.
+        Valuta il seguente claim confrontandolo rigorosamente con le evidenze fornite.
+        
+        CLAIM DA VERIFICARE: "{sub_claim}"
+        
+        EVIDENZE SCIENTIFICHE TROVATE:
         {evidence_text}
-        RAGIONAMENTO LOGICO:"""
-
-        user_content = []
-        if image_path:
-            user_content.append({"type": "image", "image": image_path})
-        user_content.append({"type": "text", "text": prompt_text})
+        
+        ISTRUZIONI PER IL RAGIONAMENTO (Chain-of-Thought):
+        Scrivi un'analisi dettagliata e discorsiva (circa 100-150 parole). Nel tuo testo devi:
+        1. Sintetizzare cosa affermano chiaramente le evidenze scientifiche fornite.
+        2. Mettere in relazione esplicita i concetti delle evidenze con il claim.
+        3. Concludere in modo inequivocabile se le evidenze supportano, smentiscono o non offrono dettagli sufficienti per confermare il claim.
+        Non usare elenchi puntati, scrivi un paragrafo logico e coeso.
+        
+        ANALISI LOGICA DETTAGLIATA:"""
 
         messages = [
-            {"role": "system", "content": [{"type": "text", "text": "Sei un analista scientifico rigoroso e imparziale."}]},
-            {"role": "user", "content": user_content}
+            {"role": "system", "content": [{"type": "text", "text": "Sei un analista scientifico rigoroso, verboso e imparziale. Il tuo scopo è spiegare il ragionamento logico in dettaglio."}]},
+            {"role": "user", "content": [{"type": "text", "text": prompt_text}]}
         ]
 
-        text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        image_inputs, video_inputs = process_vision_info(messages)
+        text_with_template = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
-        inputs = self.processor(
-            text=[text],
-            images=image_inputs,
-            videos=video_inputs,
-            padding=True,
-            return_tensors="pt"
-        ).to(self.model.device)
+        inputs = self.processor(text=[text_with_template], padding=True, return_tensors="pt").to(self.model.device)
 
         with torch.no_grad():
             generated_ids = self.model.generate(
                 **inputs,
                 max_new_tokens=512,
-                temperature=0.1,
+                temperature=0.3, # Leggermente alzata per permettere un linguaggio più discorsivo e articolato
                 do_sample=True
             )
 
@@ -234,14 +227,91 @@ class QwenNF4(Base_Qwen):
 
         response = self.processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
         
-        # Pulizia VRAM anche qui!
+        # Pulizia VRAM
         del inputs, generated_ids, generated_ids_trimmed
         torch.cuda.empty_cache()
         
         return response.strip()
-    
 
+    def build_supervise_prompt(self, messages_history: str) -> list:
+        system_prompt = """Sei il Supervisore di un sistema Multi-Agente medico (MedFactCheck).
+        Il tuo compito è leggere la cronologia dei messaggi e decidere quale agente deve essere eseguito nel prossimo step.
+        Gli agenti disponibili sono: "Decomposer", "Retriever", "Reasoner", "Veracity", "FINISH".
+        Devi rispondere ESCLUSIVAMENTE con il nome esatto dell'agente o "FINISH". Nessun'altra parola o punteggiatura."""
+        
+        messages = [
+            {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
+            {"role": "user", "content": [{"type": "text", "text": "Nessuna operazione finora. Il claim è appena arrivato."}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "Decomposer"}]},
+            {"role": "user", "content": [{"type": "text", "text": "[Decomposer]: Ho generato 2 sub-claims con successo. Ora puoi cercare le evidenze."}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "Retriever"}]},
+            {"role": "user", "content": [{"type": "text", "text": "[Retriever]: Evidenze trovate per 2 sub-claims."}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "Reasoner"}]},
+            {"role": "user", "content": [{"type": "text", "text": "[Reasoner]: Ho completato il ragionamento logico (CoT) per i sub-claims. Si può procedere con la veridicità."}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "Veracity"}]},
+            {"role": "user", "content": [{"type": "text", "text": "[Veracity]: Ho calcolato e salvato i verdetti finali. Il claim è stato completamente processato."}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "FINISH"}]},
+            {"role": "user", "content": [{"type": "text", "text": messages_history}]}
+        ]
+        return messages
 
-async def init_qwen_instance(state: Dict[str, Any]) -> Dict[str, Any]:
-    qwen_instance = QwenNF4()
-    return {"decomposition_model": qwen_instance, "reasoning_model": qwen_instance}
+    def supervise(self, messages_history: str) -> str:
+        messages = self.build_supervise_prompt(messages_history)
+        text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        
+        inputs = self.processor(text=[text], padding=True, return_tensors="pt").to(self.model.device)
+
+        with torch.no_grad():
+            generated_ids = self.model.generate(
+                **inputs, max_new_tokens=10, temperature=0.1, do_sample=False
+            )
+
+        generated_ids_trimmed = [out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)]
+        response = self.processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
+        
+        del inputs, generated_ids, generated_ids_trimmed
+        torch.cuda.empty_cache()
+        gc.collect()
+        
+        return response.strip()
+
+    def build_tool_decision_prompt(self, task_context: str, available_tools: list) -> list:
+        tools_str = ", ".join(available_tools)
+        system_prompt = f"""Sei un decisore autonomo in un sistema di tool-calling medico. Il tuo compito è selezionare il tool più appropriato per risolvere il task corrente.
+        I tool disponibili sono: [{tools_str}].
+        Rispondi ESCLUSIVAMENTE con il NOME DEL TOOL scelto, senza alcuna spiegazione aggiuntiva. Se nessun tool è adatto, rispondi "nessuno"."""
+        
+        messages = [
+            {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
+            
+            # Esempi per Agente Ingestion
+            {"role": "user", "content": [{"type": "text", "text": "Task: L'utente ha fornito questo input grezzo: 'https://it.wikipedia.org/wiki/Paracetamolo...'. Devi capire se è un link a un sito web, un percorso a un file immagine o un testo normale."}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "scrape_text_from_url"}]},
+            {"role": "user", "content": [{"type": "text", "text": "Task: L'utente ha fornito questo input grezzo: '/home/user/images/rx_torace.png...'. Devi capire se è un link a un sito web, un percorso a un file immagine o un testo normale."}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "validate_image"}]},
+            {"role": "user", "content": [{"type": "text", "text": "Task: L'utente ha fornito questo input grezzo: 'L'aspirina cura il mal di testa...'. Devi capire se è un link a un sito web, un percorso a un file immagine o un testo normale."}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "nessuno"}]},
+
+            {"role": "user", "content": [{"type": "text", "text": f"Task: {task_context}"}]}
+        ]
+        return messages
+
+    def decide_tool(self, task_context: str, available_tools: list) -> str:
+        messages = self.build_tool_decision_prompt(task_context, available_tools)
+        text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        
+        inputs = self.processor(text=[text], padding=True, return_tensors="pt").to(self.model.device)
+
+        with torch.no_grad():
+            generated_ids = self.model.generate(
+                **inputs, max_new_tokens=15, temperature=0.1, do_sample=False
+            )
+
+        generated_ids_trimmed = [out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)]
+        response = self.processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
+        
+        del inputs, generated_ids, generated_ids_trimmed
+        torch.cuda.empty_cache()
+        gc.collect()
+        
+        return response.strip()

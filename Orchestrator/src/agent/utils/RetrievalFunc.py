@@ -1,33 +1,79 @@
 from typing import Any, Dict
+from langchain_core.messages import AIMessage
+from langchain_core.tools import tool
 
+class RetrieverAgent:
+    """
+    Agente Retriever ottimizzato (Guided Execution Multi-Tool).
+    Usa il routing pre-calcolato dal Decomposer per lanciare combinazioni di strumenti.
+    """
+    def __init__(self, decision_model: Any, retrieval_models: Any):
+        self.qwen_instance = decision_model
+        self.retriever_instance = retrieval_models
 
-async def retrieve_evidence(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Retrieves evidence for sub-claims based on the routing info."""
-    retriever = state.get('retrieval_models')
-    sub_claims = state.get('sub_claims', [])
-    routing_info = state.get('routing_info', {})
+        @tool
+        def kb_bm25(query: str) -> list:
+            """Recupera definizioni statiche dalla Knowledge Base locale tramite BM25."""
+            return self.retriever_instance.kb_node.search_bm25(query, top_k=3)
 
-    print("--- RETRIEVING EVIDENCE ---")
-    retrieved_docs = {}
+        @tool
+        def lit_europe_pmc(query: str) -> list:
+            """Cerca in letteratura studi clinici e articoli scientifici (Europe PMC)."""
+            return self.retriever_instance.lit_node.retrieve_and_rerank_massive(query)
 
-    for claim in sub_claims:
-        routes = routing_info.get(claim)
-        print(f" -> Recupero evidenze per: '{claim}' [Rotte: {routes}]")
-        evidence = retriever.retrieve(claim, routes)
-        retrieved_docs[claim] = evidence
+        @tool
+        def kb_faiss(query: str) -> list:
+            """Cerca concetti affini o sinonimi nella Knowledge Base tramite ricerca vettoriale FAISS."""
+            return self.retriever_instance.kb_node.search_faiss_pq(query, top_k=3)
 
-    print(f"Recuperate evidenze per {len(retrieved_docs)} sub-claims.")
-    return {"retrieved_docs": retrieved_docs}
+        self.available_tools = {
+            "kb_bm25": kb_bm25,
+            "lit_europe_pmc": lit_europe_pmc,
+            "kb_faiss": kb_faiss
+        }
 
-async def retrieval_output_check(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Controlla che i documenti recuperati (evidenze) per i sub_claims siano validi."""
-    print("--- CHECKING RETRIEVAL OUTPUT ---")
-    sub_claims = state.get("sub_claims")
-    retrieved_docs = state.get("retrieved_docs")
-    
-    if sub_claims and isinstance(sub_claims, list) and isinstance(retrieved_docs, dict):
-        print(f"✅ Check superato: Output del retrieval valido per {len(sub_claims)} sub-claims.")
-        return {"retrieval_output_checked": True}
-    else:
-        print("❌ Check fallito: Output del retrieval mancante o non valido.")
-        return {"retrieval_output_checked": False}
+    def _route_to_tools(self, routes: list) -> list:
+        """
+        Logica deterministica per mappare la rotta su PIÙ tools in contemporanea.
+        Restituisce una lista di tool da eseguire.
+        """
+        if routes == ["kb"]:
+            return ["kb_bm25"]
+        elif "lit" in routes:
+            # L'aggiunta richiesta: esegue SIA la ricerca semantica locale SIA la letteratura
+            return ["kb_faiss", "lit_europe_pmc"]
+        else:
+            return ["kb_faiss"]
+
+    def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        print("\n[AGENTE RETRIEVER] Avvio ricerca guidata (Guided Execution Multi-Tool).")
+        sub_claims = state.get("sub_claims", [])
+        routing_info = state.get("routing_info", {})
+        
+        retrieved_docs = {}
+        for sc in sub_claims:
+            rotte_suggerite = routing_info.get(sc, ["kb"])
+            tool_names = self._route_to_tools(rotte_suggerite)
+            
+            print(f" -> [ROUTING] Rotta '{rotte_suggerite}'. Eseguo i tools: {', '.join(tool_names)}")
+            
+            docs = []
+            # Eseguiamo tutti i tool richiesti e accumuliamo i risultati
+            for t_name in tool_names:
+                if t_name in self.available_tools:
+                    print(f"    - Lancio {t_name}...")
+                    tool_results = self.available_tools[t_name].invoke({"query": sc})
+                    docs.extend(tool_results)
+            
+            # GESTIONE FALLIMENTI (Fallback)
+            if not docs:
+                print(f" ⚠️ Nessun risultato utile. Attivo Fallback Globale su tutti i rami...")
+                docs = self.retriever_instance.retrieve(sc, ["kb", "lit"])
+                
+            retrieved_docs[sc] = docs
+            print(f"    ✅ Trovati {len(docs)} documenti combinati per questo sub-claim.")
+            
+        return {
+            "retrieved_docs": retrieved_docs,
+            "messages": [AIMessage(content=f"Ricerca completata per {len(sub_claims)} sub-claims.", name="Retriever")]
+        }

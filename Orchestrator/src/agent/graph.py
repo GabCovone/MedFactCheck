@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import sys
 from typing import Any, Dict, List, Optional
+import asyncio
 
 from langgraph.graph import StateGraph
 from typing_extensions import NotRequired, TypedDict
@@ -401,3 +402,23 @@ workflow.add_conditional_edges(
 workflow.add_edge("print_final_result", "__end__")
 
 graph = workflow.compile(name="Medical Fact-Checking Graph")
+
+async def main():
+    print("🚀 Avvio del sistema MedFactCheck...")
+    while True:
+        user_input = input("\nInserisci un claim medico da verificare (o 'exit' per uscire): ")
+        if user_input.lower() in ['exit', 'quit']: 
+            break
+        
+        if not user_input.strip():
+            continue
+            
+        # Strutturiamo l'input esattamente come richiesto dallo State
+        inputs = {"claim_input": {"text": user_input}}
+        
+        print("\n🔄 Elaborazione in corso...\n")
+        async for output in graph.astream(inputs, stream_mode="updates"):
+            pass  # Non serve stampare nulla qui, ci pensano già i print interni dei nodi
+
+if __name__ == "__main__":
+    asyncio.run(main())

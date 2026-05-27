@@ -1,51 +1,54 @@
 from typing import Dict, Any
+from langchain_core.messages import AIMessage
 
-async def veracity_output_check(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Controlla che la valutazione della veridicità abbia prodotto risultati validi."""
-    print("--- CHECKING VERACITY OUTPUT ---")
-    veracity_results = state.get("veracity_results")
-    if veracity_results and isinstance(veracity_results, dict) and len(veracity_results) > 0:
-        print(f"✅ Check superato: Verdetti calcolati per {len(veracity_results)} sub-claims.")
-        return {"veracity_checked": True}
-    else:
-        print("❌ Check fallito: Nessun verdetto calcolato, impossibile procedere.")
-        return {"veracity_checked": False}
+class VeracityAgent:
+    """
+    Agente Veracity per l'architettura Multi-Agente.
+    Usa Short-Circuit evaluation per ottimizzare i calcoli.
+    """
+    def __init__(self, veracity_model: Any):
+        self.deberta_instance = veracity_model
 
-async def run_veracity(state: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Determina il verdetto finale (Supported, Refuted, NEI) e lo score di confidenza
-    basandosi sui sub-claims, le evidenze e la Chain-of-Thought.
-    """
-    print("--- DETERMINING VERACITY ---")
-    try:
-        veracity_agent = state.get("veracity_model")
+    def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        print("\n[AGENTE VERACITY] Emetto i verdetti finali e valuto la confidenza (NLI).")
         sub_claims = state.get("sub_claims", [])
         reasoning_output = state.get("reasoning_output", {})
         retrieved_docs = state.get("retrieved_docs", {})
         
         veracity_results = {}
-        
         for sc in sub_claims:
             cot = reasoning_output.get(sc, "")
             docs = retrieved_docs.get(sc, [])
-
-            final_label, score = veracity_agent.assess_veracity(
+            
+            # --- SHORT-CIRCUIT: Nessun documento = Niente inferenza pesante ---
+            if not docs:
+                print(f" -> ⚠️ Nessuna evidenza per '{sc[:30]}...'. Assegno verdetto NEI.")
+                veracity_results[sc] = {
+                    "claim": sc,
+                    "verdict": "Not Enough Information", 
+                    "confidence_score": 1.0, # 100% certi che manchino i dati
+                    "chain_of_thought_log": "Nessuna evidenza recuperata per valutare logicamente questo claim.",
+                    "supporting_evidence": []
+                }
+                continue
+            # ------------------------------------------------------------------
+            
+            print(f" -> Valuto NLI per: '{sc[:30]}...'")
+            final_label, score = self.deberta_instance.assess_veracity(
                 sub_claim=sc,
-                evidence_list=docs,
                 reasoning_text=cot
             )
-
-            # Costruiamo il dizionario esattamente come se lo aspetta StorageManager.save_verdict()
-            veracity_results[sc] = {
+            
+            veracity_output = {
                 "claim": sc,
                 "verdict": final_label, 
                 "confidence_score": score,
                 "chain_of_thought_log": cot,
-                "supporting_evidence": docs
+                "supporting_evidence": docs # Li manteniamo nel JSON finale per la Dashboard!
             }
+            veracity_results[sc] = veracity_output
             
-        print(f"✅ Calcolato verdetto per {len(veracity_results)} sub-claims.")
-        return {"veracity_results": veracity_results}
-    except Exception as e:
-        print(f"❌ Errore durante il calcolo della veridicità: {e}")
-        return {"veracity_results": {}}
+        return {
+            "veracity_results": veracity_results,
+            "messages": [AIMessage(content=f"Calcolati {len(veracity_results)} verdetti finali con successo.", name="Veracity")]
+        }

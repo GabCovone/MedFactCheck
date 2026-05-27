@@ -1,32 +1,28 @@
 from typing import Dict, Any
+from langchain_core.messages import AIMessage
 
-async def reasoning_output_check(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Controlla che il ragionamento abbia prodotto risultati validi."""
-    print("--- CHECKING REASONING OUTPUT ---")
-    reasoning_output = state.get("reasoning_output")
-    if reasoning_output and isinstance(reasoning_output, dict) and len(reasoning_output) > 0:
-        print(f"✅ Check superato: Ragionamento generato per {len(reasoning_output)} sub-claims.")
-        return {"reasoning_checked": True}
-    else:
-        print("❌ Check fallito: Generazione del ragionamento fallita o vuota.")
-        return {"reasoning_checked": False}
+class ReasonerAgent:
+    """Agente Reasoner per l'architettura Multi-Agente in approccio OOP."""
+    def __init__(self, reasoning_model: Any):
+        self.qwen_instance = reasoning_model
 
-async def run_reasoning(state: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Esegue il modello di ragionamento sui sub-claims e i documenti recuperati
-    per generare una Chain-of-Thought (CoT).
-    """
-    print("--- RUNNING REASONING ON EVIDENCE ---")
-    try:
-        reasoning_agent = state.get("reasoning_model")
+    def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        print("\n[AGENTE REASONER] Genero il ragionamento logico (CoT) basato sulle evidenze.")
         sub_claims = state.get("sub_claims", [])
         retrieved_docs = state.get("retrieved_docs", {})
         
         reasoning_outputs = {}
-        
-        # Iteriamo su ogni sub-claim per generare il ragionamento
         for sc in sub_claims:
             docs = retrieved_docs.get(sc, [])
+            
+            # --- EDGE CASE CHECK: Se non ci sono documenti, evitiamo di chiamare il LLM ---
+            if not docs:
+                print(f" -> ⚠️ Nessuna evidenza per '{sc[:30]}...'. Salto l'inferenza.")
+                reasoning_outputs[sc] = "Non Enough Information (NEI): Nessuna evidenza recuperata dalle fonti disponibili per supportare o confutare questo claim."
+                continue
+            # -------------------------------------------------------------------------------
+            
+            print(f" -> Elaboro CoT per '{sc[:30]}...' con {len(docs)} documenti.")
             
             # Inferenza gerarchica iterativa: divisione in batch di max 4 documenti
             batch_size = 4
@@ -35,21 +31,22 @@ async def run_reasoning(state: Dict[str, Any]) -> Dict[str, Any]:
             
             # Riduciamo i documenti finché non sono <= batch_size
             while len(current_docs) > batch_size:
+                print(f"    - Map-Reduce Livello {level}: Compatto {len(current_docs)} documenti in batch da {batch_size}...")
                 intermediate_docs = []
                 for i in range(0, len(current_docs), batch_size):
                     batch = current_docs[i:i + batch_size]
-                    batch_cot = reasoning_agent.reason(sub_claim=sc, evidence_list=batch)
+                    batch_cot = self.qwen_instance.reason(sub_claim=sc, evidence_list=batch)
                     intermediate_docs.append({"text": batch_cot, "source": f"Intermediate Analysis L{level}-{i//batch_size + 1}"})
                 current_docs = intermediate_docs
                 level += 1
                 
             # Ragionamento finale (o unica inferenza diretta se i documenti erano già <= 4)
-            cot = reasoning_agent.reason(sub_claim=sc, evidence_list=current_docs)
+            print(f"    - Genero CoT finale da {len(current_docs)} documenti distillati.")
+            cot = self.qwen_instance.reason(sub_claim=sc, evidence_list=current_docs)
             
             reasoning_outputs[sc] = cot
             
-        print(f"✅ Generata Chain-of-Thought per {len(reasoning_outputs)} sub-claims.")
-        return {"reasoning_output": reasoning_outputs}
-    except Exception as e:
-        print(f"❌ Errore durante il ragionamento: {e}")
-        return {"reasoning_output": {}}
+        return {
+            "reasoning_output": reasoning_outputs,
+            "messages": [AIMessage(content="Ho completato il ragionamento logico (CoT) per i sub-claims. Si può procedere con la veridicità.", name="Reasoner")]
+        }

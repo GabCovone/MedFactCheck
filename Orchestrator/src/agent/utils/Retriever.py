@@ -11,6 +11,7 @@ import torch.nn.functional as F
 from rank_bm25 import BM25Okapi
 from sentence_transformers import SentenceTransformer
 from typing import Any, Dict
+from bs4 import BeautifulSoup
 
 DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 
@@ -142,13 +143,28 @@ class LitBulkRetrieverNode:
         except Exception: return []
 
     def _fetch_full_text_from_api(self, pmcid: str) -> str:
-        params = {"query": pmcid, "format": "json", "resultType": "core"}
+        """Scarica il VERO Full-Text XML da Europe PMC e ne estrae il testo pulito."""
+        # Endpoint specifico per il full text XML
+        full_text_url = f"https://www.ebi.ac.uk/europepmc/webservices/rest/{pmcid}/fullTextXML"
         try:
-            res = requests.get(self.pmc_api_url, params=params, timeout=5)
-            if res.status_code != 200: return ""
-            result_list = res.json().get("resultList", {}).get("result", [])
-            return result_list[0].get("abstractText", "") if result_list else ""
-        except Exception: return ""
+            res = requests.get(full_text_url, timeout=10)
+            if res.status_code != 200: 
+                return ""
+            
+            # Usiamo BeautifulSoup per parsare l'XML e prendere tutto il testo dei paragrafi
+            soup = BeautifulSoup(res.content, "xml")
+            
+            # Europe PMC racchiude il corpo dell'articolo nel tag <body>
+            body = soup.find("body")
+            if not body:
+                return ""
+            
+            # Estraiamo tutto il testo rimuovendo i tag XML
+            full_text = body.get_text(separator=' ', strip=True)
+            return full_text
+        except Exception as e: 
+            print(f"Errore download full-text per {pmcid}: {e}")
+            return ""
 
     def retrieve_and_rerank_massive(self, claim: str, top_k_bm25: int = 100, top_n_biobert: int = 20) -> list:
         metadata_list = self._fetch_top_papers_metadata(claim, limit=50)
@@ -224,9 +240,3 @@ class MedFactCheckRetriever:
             print(f" -> [ROTTA COMPLESSA] 2. Ricerca Massiva su Europe PMC...")
             final_evidence.extend(self.lit_node.retrieve_and_rerank_massive(claim))
         return final_evidence
-    
-
-
-async def init_retrieval(state: Dict[str, Any]) -> Dict[str, Any]:
-    retriever = MedFactCheckRetriever()
-    return {"retrieval_models": retriever}
