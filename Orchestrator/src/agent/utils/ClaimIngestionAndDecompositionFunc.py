@@ -79,11 +79,14 @@ class IngestionAndDecomposerAgent:
         
         claim_input = state.get("claim_input", {})
         raw_text = claim_input.get("text", "")
+        image_path = claim_input.get("image", None)
         
         # ---------------------------------------------------------
         # FASE 1: TOOL SELECTION (L'IA decide la natura dell'input)
         # ---------------------------------------------------------
-        task_context = f"L'utente ha fornito questo input grezzo: '{raw_text[:100]}...'. Devi capire se è un link a un sito web, un percorso a un file immagine o un testo normale."
+        input_da_analizzare = raw_text if raw_text else (image_path if image_path else "")
+        
+        task_context = f"The user provided this raw input: '{input_da_analizzare[:100]}...'. You need to understand if it is a link to a website, a path to an image file, or normal text."
         available_tools = ["scrape_text_from_url", "validate_image"]
         
         # Qwen decide quale tool usare
@@ -94,18 +97,17 @@ class IngestionAndDecomposerAgent:
         # FASE 2: TOOL EXECUTION (Esecuzione deterministica)
         # ---------------------------------------------------------
         processed_text = raw_text
-        image_path = claim_input.get("image", None)
         
         if scelta_tool == "scrape_text_from_url":
             print(" -> Eseguo lo scraping dell'URL...")
             # Usiamo il tool che avevi già definito
-            processed_text = scrape_text_from_url.invoke({"url": raw_text})
+            processed_text = scrape_text_from_url.invoke({"url": input_da_analizzare})
             
         elif scelta_tool == "validate_image":
             print(" -> Preparo l'immagine per l'analisi multimodale...")
             # ORA CHIAMIAMO IL TOOL PER VERIFICARE
-            if validate_image.invoke({"image_path": raw_text}):
-                image_path = raw_text 
+            if validate_image.invoke({"image_path": input_da_analizzare}):
+                image_path = input_da_analizzare 
                 processed_text = ""   
             else:
                 print(" ❌ Errore: Immagine non trovata o formato non valido. Fallback a testo.")
@@ -117,6 +119,10 @@ class IngestionAndDecomposerAgent:
             
         else:
             print(" ⚠️ Tool non riconosciuto, procedo in modalità testo normale come fallback.")
+
+        # Fallback per Qwen Multimodale: se non c'è testo da processare, forniamo un'istruzione per l'immagine
+        if not processed_text and image_path:
+            processed_text = "Analyze this medical image and extract all relevant medical or scientific claims."
 
         # ---------------------------------------------------------
         # FASE 3: DECOMPOSIZIONE
@@ -133,7 +139,19 @@ class IngestionAndDecomposerAgent:
             f"Successivamente ho estratto {len(sub_claims)} sub-claims pronti per il retrieval."
         )
         
+        # --- GESTIONE SALVATAGGIO MONGODB E DASHBOARD ---
+        updated_claim_input = claim_input.copy()
+        if not raw_text:
+            if sub_claims:
+                updated_claim_input["text"] = "[Estrazione da Immagine] " + " • ".join(sub_claims)
+            else:
+                updated_claim_input["text"] = "[Nessun claim rilevato nell'immagine]"
+        
+        if "image" in updated_claim_input:
+            updated_claim_input["image"] = None
+
         return {
+            "claim_input": updated_claim_input,
             "sub_claims": sub_claims,
             "routing_info": routing_info,
             "messages": [AIMessage(content=log_message, name="IngestionAndDecomposer")]

@@ -8,6 +8,10 @@ import torch
 import numpy as np
 import requests
 import torch.nn.functional as F
+import gzip
+import io
+import csv
+from pymongo import MongoClient
 from rank_bm25 import BM25Okapi
 from sentence_transformers import SentenceTransformer
 from typing import Any, Dict
@@ -24,9 +28,9 @@ class KBBranchInitializer:
         self.embedder = shared_embedder
         os.makedirs(self.cache_dir, exist_ok=True)
 
-        self.texts_paths = [os.path.join(self.cache_dir, f"scifact_texts_v{i}.json") for i in range(1, 4)]
-        self.bm25_paths = [os.path.join(self.cache_dir, f"bm25_index_v{i}.pkl") for i in range(1, 4)]
-        self.faiss_paths = [os.path.join(self.cache_dir, f"faiss_index_v{i}.index") for i in range(1, 4)]
+        self.texts_paths = [os.path.join(self.cache_dir, f"disgenet_extended_texts_v{i}.json") for i in range(1, 4)]
+        self.bm25_paths = [os.path.join(self.cache_dir, f"disgenet_extended_bm25_v{i}.pkl") for i in range(1, 4)]
+        self.faiss_paths = [os.path.join(self.cache_dir, f"disgenet_extended_faiss_v{i}.index") for i in range(1, 4)]
 
         self.doc_texts, self.bm25, self.faiss_index = None, None, None
         self._initialize_all()
@@ -35,29 +39,49 @@ class KBBranchInitializer:
         # 1. TESTI (Download Bulletproof)
         self.doc_texts = self._load_with_fallback(self.texts_paths, json.load, "r")
         if not self.doc_texts:
-            print("-> [KB] Download diretto SciFact (URL Stabile MTEB - Anti-Crash)...")
-            url = "https://huggingface.co/datasets/mteb/scifact/resolve/main/corpus.jsonl"
-            resp = requests.get(url, timeout=30)
+            print("-> [KB] Download DisGeNET (Curated Gene-Disease Associations)...")
+            url = "https://www.disgenet.org/static/disgenet_ap1/files/downloads/curated_gene_disease_associations.tsv.gz"
+            resp = requests.get(url, timeout=60)
 
             self.doc_texts = []
-            for line in resp.text.strip().split('\n'):
-                if line.strip():
-                    doc = json.loads(line)
-                    # MTEB usa 'text' invece di 'abstract'
-                    testo_unito = f"{doc.get('title', '')} {doc.get('text', '')}"
-                    self.doc_texts.append(testo_unito)
+            with gzip.open(io.BytesIO(resp.content), 'rt', encoding='utf-8') as f:
+                reader = csv.DictReader(f, delimiter='\t')
+                for row in reader:
+                    gene = row.get('geneSymbol', '')
+                    disease = row.get('diseaseName', '')
+                    score = row.get('score', '')
+                    if gene and disease:
+                        testo_unito = f"The gene {gene} is associated with the disease {disease} with a score of {score}."
+                        self.doc_texts.append(testo_unito)
+                        
+            print("-> [KB] Download DisGeNET (Curated Variant-Disease Associations)...")
+            url_var = "https://www.disgenet.org/static/disgenet_ap1/files/downloads/curated_variant_disease_associations.tsv.gz"
+            try:
+                resp_var = requests.get(url_var, timeout=60)
+                if resp_var.status_code == 200:
+                    with gzip.open(io.BytesIO(resp_var.content), 'rt', encoding='utf-8') as f:
+                        reader = csv.DictReader(f, delimiter='\t')
+                        for row in reader:
+                            snp = row.get('snpId', row.get('variantId', ''))
+                            disease = row.get('diseaseName', '')
+                            score = row.get('score', '')
+                            if snp and disease:
+                                testo_unito = f"The genetic variant {snp} is associated with the disease {disease} with a score of {score}."
+                                self.doc_texts.append(testo_unito)
+            except Exception as e:
+                print(f"-> [KB] Avviso: Impossibile scaricare le varianti (VDAs). Continuo solo con i geni. Errore: {e}")
 
             self._save_triple_backup(self.doc_texts, self.texts_paths, lambda d, f: json.dump(d, f), "w")
 
         # 2. BM-25
-        self.bm25 = self._load_with_fallback(self.bm25_paths, pickle.load, "rb")
+        self.bm25 = self._load_bm25_with_fallback(len(self.doc_texts))
         if not self.bm25:
             print("-> [KB] Creazione indice BM25...")
             self.bm25 = BM25Okapi([doc.lower().split() for doc in self.doc_texts])
             self._save_triple_backup(self.bm25, self.bm25_paths, lambda d, f: pickle.dump(d, f), "wb")
 
         # 3. FAISS (PQ)
-        self.faiss_index = self._load_faiss_with_fallback()
+        self.faiss_index = self._load_faiss_with_fallback(len(self.doc_texts))
         if not self.faiss_index:
             print("-> [KB] Addestramento FAISS PQ in corso...")
             embeddings = self.embedder.encode(self.doc_texts, convert_to_numpy=True, show_progress_bar=True)
@@ -81,11 +105,33 @@ class KBBranchInitializer:
                 except Exception: pass
         return None
 
-    def _load_faiss_with_fallback(self):
+    def _load_bm25_with_fallback(self, expected_size):
+        for path in self.bm25_paths:
+            if os.path.exists(path):
+                try:
+                    with open(path, "rb") as f:
+                        bm25_idx = pickle.load(f)
+                        if bm25_idx.corpus_size == expected_size:
+                            print(f"-> [KB] Indice BM25 integro caricato da {path}")
+                            return bm25_idx
+                        else:
+                            print(f"-> [KB] Avviso: Indice BM25 in {path} obsoleto. Provo backup...")
+                except Exception as e:
+                    print(f"-> [KB] Errore lettura BM25: {e}")
+        return None
+
+    def _load_faiss_with_fallback(self, expected_size):
         for path in self.faiss_paths:
             if os.path.exists(path):
-                try: return faiss.read_index(path)
-                except Exception: pass
+                try: 
+                    idx = faiss.read_index(path)
+                    if idx.ntotal == expected_size:
+                        print(f"-> [KB] Indice FAISS integro caricato da {path}")
+                        return idx
+                    else:
+                        print(f"-> [KB] Avviso: Indice FAISS in {path} obsoleto. Provo backup...")
+                except Exception as e: 
+                    print(f"-> [KB] Errore lettura FAISS da {path}: {e}")
         return None
 
     def _save_triple_backup(self, data, paths, save_func, mode):
@@ -107,7 +153,7 @@ class KBRetrieverNode:
         scores = self.bm25.get_scores(query.lower().split())
         top_indices = np.argsort(scores)[::-1][:top_k]
         return [{"text": self._apply_hard_truncation(self.doc_texts[idx]),
-                 "source": "KB (SciFact - BM25)",
+                 "source": "KB (DisGeNET - BM25)",
                  "score": round(float(scores[idx]), 4)}
                 for idx in top_indices if scores[idx] > 0]
 
@@ -120,7 +166,7 @@ class KBRetrieverNode:
         faiss.normalize_L2(query_vector)
         distances, indices = self.faiss_index.search(query_vector, top_k)
         return [{"text": self._apply_hard_truncation(self.doc_texts[idx]),
-                 "source": "KB (SciFact - FAISS)",
+                 "source": "KB (DisGeNET - FAISS)",
                  "score": round(float(dist), 4)}
                 for dist, idx in zip(distances[0], indices[0]) if idx != -1]
 
@@ -132,7 +178,8 @@ class LitBulkRetrieverNode:
     def __init__(self, shared_embedder):
         self.embedder = shared_embedder
         self.pmc_api_url = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
-        self.article_cache = {}
+        self.mongo_client = MongoClient(os.getenv("MONGO_URI", "mongodb://localhost:27017/"), serverSelectionTimeoutMS=5000)
+        self.papers_collection = self.mongo_client.get_database(os.getenv("MONGO_DB_NAME", "medfactcheck")).get_collection("papers")
 
     def _fetch_top_papers_metadata(self, query: str, limit: int = 50) -> list:
         params = {"query": f'({query}) AND OPEN_ACCESS:y', "format": "json", "resultType": "lite", "pageSize": limit}
@@ -171,7 +218,8 @@ class LitBulkRetrieverNode:
         if not metadata_list: return []
 
         target_ids = [m["id"] for m in metadata_list]
-        cached_papers = {id_p: self.article_cache[id_p] for id_p in target_ids if id_p in self.article_cache}
+        cached_docs = list(self.papers_collection.find({"id": {"$in": target_ids}}, {"_id": 0}))
+        cached_papers = {doc["id"]: doc for doc in cached_docs}
 
         final_papers = []
         for meta in metadata_list:
@@ -183,7 +231,7 @@ class LitBulkRetrieverNode:
                 if full_text:
                     paper_doc = {"id": pid, "title": meta["title"], "text": full_text}
                     final_papers.append(paper_doc)
-                    self.article_cache[pid] = paper_doc
+                    self.papers_collection.update_one({"id": pid}, {"$set": paper_doc}, upsert=True)
                 time.sleep(0.1) # Pausa di sicurezza
 
         all_chunks = []
@@ -220,7 +268,7 @@ class MedFactCheckRetriever:
         print("[*] Allocazione S-PubMedBert (FP16) in VRAM...")
         self.embedder = SentenceTransformer('pritamdeka/S-PubMedBert-MS-MARCO', model_kwargs={"torch_dtype": torch.float16}, device=DEVICE)
 
-        print("[*] Sincronizzazione Ramo KB (SciFact)...")
+        print("[*] Sincronizzazione Ramo KB (DisGeNET)...")
         kb_data = KBBranchInitializer(shared_embedder=self.embedder)
         self.kb_node = KBRetrieverNode(kb_data, shared_embedder=self.embedder)
 
@@ -232,10 +280,10 @@ class MedFactCheckRetriever:
     def retrieve(self, claim: str, routes: list) -> list:
         final_evidence = []
         if routes == ["kb"]:
-            print(f" -> [ROTTA KB ESATTA] Esecuzione BM-25 su SciFact...")
+            print(f" -> [ROTTA KB ESATTA] Esecuzione BM-25 su DisGeNET...")
             final_evidence.extend(self.kb_node.search_bm25(claim, top_k=3))
         elif "lit" in routes:
-            print(f" -> [ROTTA COMPLESSA] 1. FAISS su SciFact...")
+            print(f" -> [ROTTA COMPLESSA] 1. FAISS su DisGeNET...")
             final_evidence.extend(self.kb_node.search_faiss_pq(claim, top_k=3))
             print(f" -> [ROTTA COMPLESSA] 2. Ricerca Massiva su Europe PMC...")
             final_evidence.extend(self.lit_node.retrieve_and_rerank_massive(claim))

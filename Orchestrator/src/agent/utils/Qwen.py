@@ -49,25 +49,25 @@ class QwenNF4(Base_Qwen):
         print("Modello Multimodale caricato e pronto!")
 
     def build_qwen_few_shot_prompt(self, user_text: str, image_path: str = None) -> list:
-        system_prompt = """Sei uno script di estrazione dati MULTIMODALE e AUTOMATICO. Puoi analizzare sia testo che immagini. Il tuo unico scopo è estrarre un array di proposizioni dichiarative indipendenti (Soggetto + Verbo + Oggetto).
-        NON sei un assistente conversazionale. NON scusarti, NON dialogare e NON fare domande. Restituisci SEMPRE e SOLO il JSON valido. Se rifiuti di analizzare, lo script andrà in crash.
+        system_prompt = """You are an AUTOMATIC and MULTIMODAL data extraction script. You can analyze both text and images. Your only purpose is to extract an array of independent declarative propositions (Subject + Verb + Object).
+        You are NOT a conversational assistant. DO NOT apologize, DO NOT converse, and DO NOT ask questions. ALWAYS and ONLY return a valid JSON. If you refuse to analyze, the script will crash.
 
-        REGOLE SINTATTICHE (CRITICHE):
-        1. COMPLETEZZA: Estrai TUTTI i claim medici, chimici o scientifici rilevanti dal testo o dai contenuti dell'immagine.
-        2. ANEDDOTI E FAKE NEWS: Scarta rigorosamente le narrazioni personali ("Mio cugino ha preso..."). Tuttavia, se la frase nasconde una teoria medica (es. "X è la cura definitiva!"), ESTRAI QUELLA TEORIA in modo neutrale.
-        3. RISOLUZIONE DEL SOGGETTO: I pronomi o i soggetti sottintesi devono essere esplicitati.
-        4. REASONING BREVE: Il campo "reasoning" deve essere di MASSIMO 15 PAROLE per evitare errori di formattazione.
+        SYNTACTIC RULES (CRITICAL):
+        1. COMPLETENESS: Extract ALL relevant medical, chemical, or scientific claims from the text or image contents.
+        2. ANECDOTES AND FAKE NEWS: Strictly discard personal narratives ("My cousin took..."). However, if the sentence hides a medical theory (e.g., "X is the definitive cure!"), EXTRACT THAT THEORY in a neutral way.
+        3. SUBJECT RESOLUTION: Pronouns or implied subjects must be made explicit.
+        4. SHORT REASONING: The "reasoning" field must be MAXIMUM 15 WORDS to avoid formatting errors.
 
-        REGOLE DI CLASSIFICAZIONE (ROUTING) - LEGGERE ATTENTAMENTE:
-        - Assegna ["kb"] SOLO alle frasi che descrivono definizioni biologiche/chimiche, tassonomia, composizione o proprietà puramente statiche (es. "X è un ormone", "L'aspirina è un farmaco", "X contiene Y", "X ha una massa di Z").
-        - Assegna ["kb", "lit"] a TUTTE le altre frasi che descrivono cause, correlazioni, azioni, effetti clinici, cure o eventi (es. "X altera Y", "X riduce Z", "X è la causa di Y").
+        CLASSIFICATION RULES (ROUTING) - READ CAREFULLY:
+        - Assign ["kb"] ONLY to sentences describing biological/chemical definitions, taxonomy, composition, or purely static properties (e.g., "X is a hormone", "Aspirin is a drug", "X contains Y", "X has a mass of Z").
+        - Assign ["kb", "lit"] to ALL other sentences describing causes, correlations, actions, clinical effects, cures, or events (e.g., "X alters Y", "X reduces Z", "X is the cause of Y").
 
-        FORMATO DI OUTPUT:
+        OUTPUT FORMAT:
         {
-        "reasoning": "Breve logica...",
+        "reasoning": "Short logic...",
         "sub_claims": [
             {
-            "claim": "Frase completa e indipendente",
+            "claim": "Complete and independent sentence",
             "routes": ["..."]
             }
         ]
@@ -78,20 +78,20 @@ class QwenNF4(Base_Qwen):
         {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
 
         # ESEMPIO 1: Routing base
-        {"role": "user", "content": [{"type": "text", "text": "TITOLO: La radice magica. PUNTO 1: Contiene molta vitamina C. PUNTO 2: Cura il cancro ai polmoni in una settimana."}]},
-        {"role": "assistant", "content": [{"type": "text", "text": "{\n  \"reasoning\": \"Punto 1 composizione (kb). Punto 2 azione estrema (kb, lit). Soggetto risolto.\",\n  \"sub_claims\": [\n    {\n      \"claim\": \"La radice magica contiene molta vitamina C.\",\n      \"routes\": [\"kb\"]\n    },\n    {\n      \"claim\": \"La radice magica cura il cancro ai polmoni in una settimana.\",\n      \"routes\": [\"kb\", \"lit\"]\n    }\n  ]\n}"}]},
+        {"role": "user", "content": [{"type": "text", "text": "TITLE: The magic root. POINT 1: It contains a lot of vitamin C. POINT 2: It cures lung cancer in a week."}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "{\n  \"reasoning\": \"Point 1 composition (kb). Point 2 extreme action (kb, lit). Subject resolved.\",\n  \"sub_claims\": [\n    {\n      \"claim\": \"The magic root contains a lot of vitamin C.\",\n      \"routes\": [\"kb\"]\n    },\n    {\n      \"claim\": \"The magic root cures lung cancer in a week.\",\n      \"routes\": [\"kb\", \"lit\"]\n    }\n  ]\n}"}]},
 
         # ESEMPIO 2: Eliminazione metodologie
-        {"role": "user", "content": [{"type": "text", "text": "Uno studio dimostra che mangiare aglio altera i batteri intestinali. Ricordiamo che l'aglio è un bulbo."}]},
-        {"role": "assistant", "content": [{"type": "text", "text": "{\n  \"reasoning\": \"Scarto la metodologia. Estraggo l'azione (kb, lit) e la definizione statica (kb).\",\n  \"sub_claims\": [\n    {\n      \"claim\": \"Mangiare aglio altera i batteri intestinali.\",\n      \"routes\": [\"kb\", \"lit\"]\n    },\n    {\n      \"claim\": \"L'aglio è un bulbo.\",\n      \"routes\": [\"kb\"]\n    }\n  ]\n}"}]},
+        {"role": "user", "content": [{"type": "text", "text": "A study shows that eating garlic alters intestinal bacteria. Recall that garlic is a bulb."}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "{\n  \"reasoning\": \"Discard methodology. Extract action (kb, lit) and static definition (kb).\",\n  \"sub_claims\": [\n    {\n      \"claim\": \"Eating garlic alters intestinal bacteria.\",\n      \"routes\": [\"kb\", \"lit\"]\n    },\n    {\n      \"claim\": \"Garlic is a bulb.\",\n      \"routes\": [\"kb\"]\n    }\n  ]\n}"}]},
 
         # ESEMPIO 3: Gestione severa di Aneddoti e Fake News mischiate (Questo risolve il Test 2)
-        {"role": "user", "content": [{"type": "text", "text": "Mio nonno mangiava sempre la terra e il giorno dopo stava bene. I medici mentono, la terra è la cura definitiva! Ricordate che la terra contiene minerali."}]},
-        {"role": "assistant", "content": [{"type": "text", "text": "{\n  \"reasoning\": \"Scarto aneddoto del nonno. Estraggo claim medico estremo (kb, lit) e composizione (kb).\",\n  \"sub_claims\": [\n    {\n      \"claim\": \"La terra è la cura definitiva.\",\n      \"routes\": [\"kb\", \"lit\"]\n    },\n    {\n      \"claim\": \"La terra contiene minerali.\",\n      \"routes\": [\"kb\"]\n    }\n  ]\n}"}]},
+        {"role": "user", "content": [{"type": "text", "text": "My grandfather always ate dirt and the next day he was fine. Doctors lie, dirt is the definitive cure! Remember that dirt contains minerals."}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "{\n  \"reasoning\": \"Discard grandfather anecdote. Extract extreme medical claim (kb, lit) and composition (kb).\",\n  \"sub_claims\": [\n    {\n      \"claim\": \"Dirt is the definitive cure.\",\n      \"routes\": [\"kb\", \"lit\"]\n    },\n    {\n      \"claim\": \"Dirt contains minerals.\",\n      \"routes\": [\"kb\"]\n    }\n  ]\n}"}]},
 
         # ESEMPIO 4: Routing per classificazioni farmaceutiche (Questo risolve il Test 6)
-        {"role": "user", "content": [{"type": "text", "text": "L'ibuprofene è un antinfiammatorio non steroideo. Riduce drasticamente il dolore articolare."}]},
-        {"role": "assistant", "content": [{"type": "text", "text": "{\n  \"reasoning\": \"Estraggo classificazione farmacologica (kb) e azione clinica (kb, lit).\",\n  \"sub_claims\": [\n    {\n      \"claim\": \"L'ibuprofene è un antinfiammatorio non steroideo.\",\n      \"routes\": [\"kb\"]\n    },\n    {\n      \"claim\": \"L'ibuprofene riduce drasticamente il dolore articolare.\",\n      \"routes\": [\"kb\", \"lit\"]\n    }\n  ]\n}"}]}
+        {"role": "user", "content": [{"type": "text", "text": "Ibuprofen is a nonsteroidal anti-inflammatory drug. It drastically reduces joint pain."}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "{\n  \"reasoning\": \"Extract pharmacological classification (kb) and clinical action (kb, lit).\",\n  \"sub_claims\": [\n    {\n      \"claim\": \"Ibuprofen is a nonsteroidal anti-inflammatory drug.\",\n      \"routes\": [\"kb\"]\n    },\n    {\n      \"claim\": \"Ibuprofen drastically reduces joint pain.\",\n      \"routes\": [\"kb\", \"lit\"]\n    }\n  ]\n}"}]}
     ]
 
         user_content = []
@@ -187,25 +187,25 @@ class QwenNF4(Base_Qwen):
     def reason(self, sub_claim: str, evidence_list: list) -> str:
         evidence_text = "\n".join([f"- {e['text']} (Fonte: {e['source']})" for e in evidence_list])
 
-        prompt_text = f"""Sei un esperto analista biomedico incaricato di validare affermazioni scientifiche.
-        Valuta il seguente claim confrontandolo rigorosamente con le evidenze fornite.
+        prompt_text = f"""You are an expert biomedical analyst tasked with validating scientific claims.
+        Evaluate the following claim by rigorously comparing it with the provided evidence.
         
-        CLAIM DA VERIFICARE: "{sub_claim}"
+        CLAIM TO VERIFY: "{sub_claim}"
         
-        EVIDENZE SCIENTIFICHE TROVATE:
+        SCIENTIFIC EVIDENCE FOUND:
         {evidence_text}
         
-        ISTRUZIONI PER IL RAGIONAMENTO (Chain-of-Thought):
-        Scrivi un'analisi dettagliata e discorsiva (circa 100-150 parole). Nel tuo testo devi:
-        1. Sintetizzare cosa affermano chiaramente le evidenze scientifiche fornite.
-        2. Mettere in relazione esplicita i concetti delle evidenze con il claim.
-        3. Concludere in modo inequivocabile se le evidenze supportano, smentiscono o non offrono dettagli sufficienti per confermare il claim.
-        Non usare elenchi puntati, scrivi un paragrafo logico e coeso.
+        REASONING INSTRUCTIONS (Chain-of-Thought):
+        Write a detailed and discursive analysis (about 100-150 words). In your text you must:
+        1. Synthesize what the provided scientific evidence clearly states.
+        2. Explicitly relate the concepts of the evidence to the claim.
+        3. Conclude unequivocally whether the evidence supports, refutes, or does not offer sufficient details to confirm the claim.
+        Do not use bullet points, write a logical and cohesive paragraph.
         
-        ANALISI LOGICA DETTAGLIATA:"""
+        DETAILED LOGICAL ANALYSIS:"""
 
         messages = [
-            {"role": "system", "content": [{"type": "text", "text": "Sei un analista scientifico rigoroso, verboso e imparziale. Il tuo scopo è spiegare il ragionamento logico in dettaglio."}]},
+            {"role": "system", "content": [{"type": "text", "text": "You are a rigorous, verbose, and impartial scientific analyst. Your goal is to explain the logical reasoning in detail."}]},
             {"role": "user", "content": [{"type": "text", "text": prompt_text}]}
         ]
 
@@ -234,22 +234,22 @@ class QwenNF4(Base_Qwen):
         return response.strip()
 
     def build_supervise_prompt(self, messages_history: str) -> list:
-        system_prompt = """Sei il Supervisore di un sistema Multi-Agente medico (MedFactCheck).
-        Il tuo compito è leggere la cronologia dei messaggi e decidere quale agente deve essere eseguito nel prossimo step.
-        Gli agenti disponibili sono: "Decomposer", "Retriever", "Reasoner", "Veracity", "FINISH".
-        Devi rispondere ESCLUSIVAMENTE con il nome esatto dell'agente o "FINISH". Nessun'altra parola o punteggiatura."""
+        system_prompt = """You are the Supervisor of a medical Multi-Agent system (MedFactCheck).
+        Your task is to read the message history and decide which agent should be executed in the next step.
+        The available agents are: "Decomposer", "Retriever", "Reasoner", "Veracity", "FINISH".
+        You must reply EXCLUSIVELY with the exact name of the agent or "FINISH". No other words or punctuation."""
         
         messages = [
             {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
-            {"role": "user", "content": [{"type": "text", "text": "Nessuna operazione finora. Il claim è appena arrivato."}]},
+            {"role": "user", "content": [{"type": "text", "text": "No operations so far. The claim just arrived."}]},
             {"role": "assistant", "content": [{"type": "text", "text": "Decomposer"}]},
-            {"role": "user", "content": [{"type": "text", "text": "[Decomposer]: Ho generato 2 sub-claims con successo. Ora puoi cercare le evidenze."}]},
+            {"role": "user", "content": [{"type": "text", "text": "[Decomposer]: I successfully generated 2 sub-claims. Now you can search for evidence."}]},
             {"role": "assistant", "content": [{"type": "text", "text": "Retriever"}]},
-            {"role": "user", "content": [{"type": "text", "text": "[Retriever]: Evidenze trovate per 2 sub-claims."}]},
+            {"role": "user", "content": [{"type": "text", "text": "[Retriever]: Evidence found for 2 sub-claims."}]},
             {"role": "assistant", "content": [{"type": "text", "text": "Reasoner"}]},
-            {"role": "user", "content": [{"type": "text", "text": "[Reasoner]: Ho completato il ragionamento logico (CoT) per i sub-claims. Si può procedere con la veridicità."}]},
+            {"role": "user", "content": [{"type": "text", "text": "[Reasoner]: I completed the logical reasoning (CoT) for the sub-claims. We can proceed with veracity."}]},
             {"role": "assistant", "content": [{"type": "text", "text": "Veracity"}]},
-            {"role": "user", "content": [{"type": "text", "text": "[Veracity]: Ho calcolato e salvato i verdetti finali. Il claim è stato completamente processato."}]},
+            {"role": "user", "content": [{"type": "text", "text": "[Veracity]: I calculated and saved the final verdicts. The claim has been completely processed."}]},
             {"role": "assistant", "content": [{"type": "text", "text": "FINISH"}]},
             {"role": "user", "content": [{"type": "text", "text": messages_history}]}
         ]
@@ -277,19 +277,19 @@ class QwenNF4(Base_Qwen):
 
     def build_tool_decision_prompt(self, task_context: str, available_tools: list) -> list:
         tools_str = ", ".join(available_tools)
-        system_prompt = f"""Sei un decisore autonomo in un sistema di tool-calling medico. Il tuo compito è selezionare il tool più appropriato per risolvere il task corrente.
-        I tool disponibili sono: [{tools_str}].
-        Rispondi ESCLUSIVAMENTE con il NOME DEL TOOL scelto, senza alcuna spiegazione aggiuntiva. Se nessun tool è adatto, rispondi "nessuno"."""
+        system_prompt = f"""You are an autonomous decision maker in a medical tool-calling system. Your task is to select the most appropriate tool to solve the current task.
+        The available tools are: [{tools_str}].
+        Reply EXCLUSIVELY with the NAME OF THE TOOL chosen, without any additional explanation. If no tool is suitable, reply "nessuno"."""
         
         messages = [
             {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
             
             # Esempi per Agente Ingestion
-            {"role": "user", "content": [{"type": "text", "text": "Task: L'utente ha fornito questo input grezzo: 'https://it.wikipedia.org/wiki/Paracetamolo...'. Devi capire se è un link a un sito web, un percorso a un file immagine o un testo normale."}]},
+            {"role": "user", "content": [{"type": "text", "text": "Task: The user provided this raw input: 'https://en.wikipedia.org/wiki/Paracetamol...'. You need to understand if it's a link to a website, a path to an image file, or normal text."}]},
             {"role": "assistant", "content": [{"type": "text", "text": "scrape_text_from_url"}]},
-            {"role": "user", "content": [{"type": "text", "text": "Task: L'utente ha fornito questo input grezzo: '/home/user/images/rx_torace.png...'. Devi capire se è un link a un sito web, un percorso a un file immagine o un testo normale."}]},
+            {"role": "user", "content": [{"type": "text", "text": "Task: The user provided this raw input: '/home/user/images/chest_xray.png...'. You need to understand if it's a link to a website, a path to an image file, or normal text."}]},
             {"role": "assistant", "content": [{"type": "text", "text": "validate_image"}]},
-            {"role": "user", "content": [{"type": "text", "text": "Task: L'utente ha fornito questo input grezzo: 'L'aspirina cura il mal di testa...'. Devi capire se è un link a un sito web, un percorso a un file immagine o un testo normale."}]},
+            {"role": "user", "content": [{"type": "text", "text": "Task: The user provided this raw input: 'Aspirin cures headaches...'. You need to understand if it's a link to a website, a path to an image file, or normal text."}]},
             {"role": "assistant", "content": [{"type": "text", "text": "nessuno"}]},
 
             {"role": "user", "content": [{"type": "text", "text": f"Task: {task_context}"}]}

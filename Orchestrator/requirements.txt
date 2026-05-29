@@ -1,15 +1,35 @@
+# --- Core API & Server ---
+fastapi
+uvicorn[standard]
+python-multipart
+nest-asyncio
+
+# --- Machine Learning & LLM (Qwen / Embeddings) ---
+torch
+torchvision
+transformers
 accelerate
-beautifulsoup4
 bitsandbytes
-faiss-gpu-cu12
+sentence-transformers
+
+# --- Vector DB & Retrieval ---
+faiss-cpu
+rank_bm25
+numpy
+
+# --- Agent Framework (LangGraph) ---
 langchain-core
 langgraph
-numpy
-pymongo
-qwen-vl-utils
-rank-bm25
+langgraph-checkpoint-mongodb
+
+# --- Scraping & Utilities ---
 requests
-sentence-transformers
-torch
-transformers
-typing-extensions
+beautifulsoup4
+Pillow
+
+# --- Database ---
+pymongo
+
+# --- Dashboard & Export ---
+streamlit
+reportlab

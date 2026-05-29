@@ -1,1 +1,0 @@
-# MedFactCheck
