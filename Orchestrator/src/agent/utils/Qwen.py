@@ -54,6 +54,7 @@ class QwenNF4(Base_Qwen):
 
         SYNTACTIC RULES (CRITICAL):
         1. COMPLETENESS: Extract ALL relevant medical, chemical, or scientific claims from the text or image contents.
+        1. EXTRACTION LIMIT: Extract a MAXIMUM of 5 most important medical, chemical, or scientific sub-claims from the text or image contents. Do not extract every single detail.
         2. ANECDOTES AND FAKE NEWS: Strictly discard personal narratives ("My cousin took..."). However, if the sentence hides a medical theory (e.g., "X is the definitive cure!"), EXTRACT THAT THEORY in a neutral way.
         3. SUBJECT RESOLUTION: Pronouns or implied subjects must be made explicit.
         4. SHORT REASONING: The "reasoning" field must be MAXIMUM 15 WORDS to avoid formatting errors.
@@ -142,7 +143,7 @@ class QwenNF4(Base_Qwen):
         with torch.no_grad():
             generated_ids = self.model.generate(
                 **inputs,
-                max_new_tokens=512,
+                max_new_tokens=2048,
                 temperature=0.1,
                 do_sample=True
             )

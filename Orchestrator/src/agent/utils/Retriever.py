@@ -39,37 +39,28 @@ class KBBranchInitializer:
         # 1. TESTI (Download Bulletproof)
         self.doc_texts = self._load_with_fallback(self.texts_paths, json.load, "r")
         if not self.doc_texts:
-            print("-> [KB] Download DisGeNET (Curated Gene-Disease Associations)...")
-            url = "https://www.disgenet.org/static/disgenet_ap1/files/downloads/curated_gene_disease_associations.tsv.gz"
-            resp = requests.get(url, timeout=60)
+            print("-> [KB] Lettura DisGeNET (Curated Gene-Disease Associations) da locale...")
+            utils_dir = os.path.dirname(os.path.abspath(__file__))
+            disgenet_dir = os.path.join(utils_dir, "Disgenet")
+            local_gene_path = os.path.join(disgenet_dir, "curated_gene_disease_associations.tsv")
 
             self.doc_texts = []
-            with gzip.open(io.BytesIO(resp.content), 'rt', encoding='utf-8') as f:
+            
+            if not os.path.exists(local_gene_path):
+                raise RuntimeError(f"Errore Critico: File non trovato in {local_gene_path}. Assicurati di aver inserito i file nella cartella Disgenet.")
+            
+            print(f"   - Trovato file locale: {local_gene_path}")
+            with open(local_gene_path, 'rt', encoding='utf-8') as f:
                 reader = csv.DictReader(f, delimiter='\t')
                 for row in reader:
                     gene = row.get('geneSymbol', '')
                     disease = row.get('diseaseName', '')
                     score = row.get('score', '')
                     if gene and disease:
-                        testo_unito = f"The gene {gene} is associated with the disease {disease} with a score of {score}."
-                        self.doc_texts.append(testo_unito)
+                        self.doc_texts.append(f"The gene {gene} is associated with the disease {disease} with a score of {score}.")
                         
-            print("-> [KB] Download DisGeNET (Curated Variant-Disease Associations)...")
-            url_var = "https://www.disgenet.org/static/disgenet_ap1/files/downloads/curated_variant_disease_associations.tsv.gz"
-            try:
-                resp_var = requests.get(url_var, timeout=60)
-                if resp_var.status_code == 200:
-                    with gzip.open(io.BytesIO(resp_var.content), 'rt', encoding='utf-8') as f:
-                        reader = csv.DictReader(f, delimiter='\t')
-                        for row in reader:
-                            snp = row.get('snpId', row.get('variantId', ''))
-                            disease = row.get('diseaseName', '')
-                            score = row.get('score', '')
-                            if snp and disease:
-                                testo_unito = f"The genetic variant {snp} is associated with the disease {disease} with a score of {score}."
-                                self.doc_texts.append(testo_unito)
-            except Exception as e:
-                print(f"-> [KB] Avviso: Impossibile scaricare le varianti (VDAs). Continuo solo con i geni. Errore: {e}")
+            if not self.doc_texts:
+                raise RuntimeError("Errore critico: Nessun record estratto da DisGeNET. Interruzione.")
 
             self._save_triple_backup(self.doc_texts, self.texts_paths, lambda d, f: json.dump(d, f), "w")
 

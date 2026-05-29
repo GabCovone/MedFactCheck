@@ -9,9 +9,6 @@ import nest_asyncio
 import streamlit as st
 from pymongo import MongoClient, DESCENDING
 
-# ── Abilita loop annidati (Streamlit ha già un event loop attivo) ─────────────
-nest_asyncio.apply()
-
 # ─────────────────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="MedFactCheck",
@@ -263,7 +260,7 @@ def run_pipeline(claim_text: str, image_path: str = None) -> dict:
         files["image"] = open(image_path, "rb")
         
     try:
-        response = requests.post(f"{API_URL}/verify", data=data, files=files, timeout=600)
+        response = requests.post(f"{API_URL}/verify", data=data, files=files, timeout=3600)
         response.raise_for_status()
         # Restituisce l'ID del claim, con cui recupereremo il risultato da Mongo
         return response.json()
@@ -301,7 +298,7 @@ def fmt_ts(iso):
 # ─────────────────────────────────────────────────────────────────────────────
 for k, v in {
     "sel": None, "sec": "Verdict",
-    "flt": "All", "kw": "", "thr": 0.0,
+    "flt": "All", "kw": "", "thr": 0,
     "flt_date": "All time", "flt_src": "All",
     "running": False, "error": None
 }.items():
@@ -377,7 +374,7 @@ with st.sidebar:
                        placeholder="e.g., vitamin D, mRNA…", label_visibility="collapsed")
     st.session_state.kw = kw
 
-    thr = st.slider("Confidence threshold", 0.0, 1.0, st.session_state.thr, 0.05, format="%.0f%%")
+    thr = st.slider("Confidence threshold", 0, 100, int(st.session_state.thr), 5, format="%d%%")
     st.session_state.thr = thr
 
     st.markdown('<div class="glow-sep"></div>', unsafe_allow_html=True)
@@ -402,7 +399,7 @@ with left:
         sf  = None if st.session_state.flt_src == "All" else st.session_state.flt_src
         df  = None if st.session_state.flt_date == "All time" else st.session_state.flt_date
         results = get_results(vf, kw.strip() or None, df, sf, 50)
-        results = [r for r in results if r.get("avg_confidence", 0) >= st.session_state.thr]
+        results = [r for r in results if r.get("avg_confidence", 0) * 100 >= st.session_state.thr]
 
         if not results:
             st.markdown('<p style="color:#334155;font-size:13px;margin-top:8px;">No claims found.</p>',
@@ -552,14 +549,23 @@ with right:
     # ── CLAIM SELEZIONATO → visualizzazione ────────────────────────────────
     else:
         r  = st.session_state.sel
-        vc = VC.get(r["final_verdict"], "nei")
+        verdetto = r.get("final_verdict")
+        
+        if not verdetto:
+            st.error("⚠️ The server interrupted the analysis (Likely LLM token limit reached). No verdict generated.")
+            if st.button("← Back"):
+                st.session_state.sel = None
+                st.rerun()
+            st.stop()
+
+        vc = VC.get(verdetto, "nei")
 
         st.markdown('<div class="page-title">📋 Verified result</div>', unsafe_allow_html=True)
         st.markdown(
             f'<div class="result-header">'
             f'<div class="rh-text">{r["original_text"]}</div>'
             f'<div style="display:flex;align-items:center;gap:16px;">'
-            f'{badge(r["final_verdict"])}'
+            f'{badge(verdetto)}'
             f'<div style="flex:1;max-width:200px;">{conf_bar(r.get("avg_confidence",0), vc)}</div>'
             f'</div></div>',
             unsafe_allow_html=True)

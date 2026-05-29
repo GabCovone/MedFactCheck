@@ -2,11 +2,13 @@ import requests
 import random
 import json
 import os
-import textwrap
 from PIL import Image, ImageDraw, ImageFont
 
-def get_random_scifact_claims(n=10):
-    print(f"⏳ Scaricando {n} claim da SciFact (tramite MTEB)...")
+# Cartella dove l'utente ha salvato le immagini cliniche e dove verranno create le social
+IMG_DIR = "test_image" 
+
+def get_random_scifact_claims(n=5):
+    print(f"⏳ Scaricando {n} claim da SciFact (tramite MTEB) per i test puramente testuali...")
     url = "https://huggingface.co/datasets/mteb/scifact/resolve/main/queries.jsonl"
     try:
         response = requests.get(url, timeout=10)
@@ -18,7 +20,7 @@ def get_random_scifact_claims(n=10):
         return [f"Offline generated clinical claim #{i} for testing purposes." for i in range(1, n+1)]
 
 def generate_social_mockups(output_dir):
-    """Genera finti screenshot social in INGLESE per test OCR."""
+    """Genera finti screenshot social in INGLESE per test OCR e Fact-Checking."""
     scenari = [
         ("social_1_tweet_diabetes.png", (21, 32, 43), (255, 255, 255), "Tweet by @HealthGuru:\n\nIntermittent fasting completely cures\ntype 2 diabetes in just 4 weeks.\n\nStop taking insulin today!"),
         ("social_2_facebook_covid.png", (240, 242, 245), (28, 30, 33), "Group Post 'Informed Moms':\n\nHigh doses of Vitamin C completely\nprevent and cure Covid-19 infection.\n\nDon't trust Big Pharma drugs!"),
@@ -28,6 +30,7 @@ def generate_social_mockups(output_dir):
     ]
     
     generated_paths = []
+    os.makedirs(output_dir, exist_ok=True)
     
     for filename, bg_color, text_color, text in scenari:
         img = Image.new('RGB', (900, 450), color=bg_color)
@@ -44,87 +47,79 @@ def generate_social_mockups(output_dir):
         
     return generated_paths
 
-def generate_hybrid_mockup(claim_text, index, output_dir):
-    """Genera un finto grafico di un paper scientifico coerente col claim testuale."""
-    img = Image.new('RGB', (800, 500), color=(250, 250, 250))
-    draw = ImageDraw.Draw(img)
+def get_hybrid_test_cases(img_dir):
+    """Associa le immagini cliniche salvate dall'utente ai Claim in Inglese corretti."""
     
-    try:
-        font_title = ImageFont.truetype("arial.ttf", 26)
-        font_text = ImageFont.truetype("arial.ttf", 18)
-    except:
-        font_title = ImageFont.load_default()
-        font_text = ImageFont.load_default()
-        
-    # Titolo derivato dal claim (prime 6 parole)
-    words = claim_text.split()
-    title = "Research Fig: " + " ".join(words[:6]) + "..."
+    hybrid_cases = [
+        {
+            "img": "COVID-19_Chest_X-ray.jpg",
+            "claim": "The pulmonary infection shown in this X-ray (Covid-19) can be permanently and quickly cured by taking broad-spectrum antibiotics such as amoxicillin."
+        },
+        {
+            "img": "Melanoma.jpg",
+            "claim": "This skin lesion, despite being asymmetrical with irregular borders, is a harmless cherry angioma that has no chance of evolving into a malignant tumor."
+        },
+        {
+            "img": "Normal_ECG_-_12_lead.jpg",
+            "claim": "This 12-lead ECG tracing shows obvious signs of an acute myocardial infarction (STEMI) with severe ongoing ischemia."
+        },
+        {
+            "img": "Ibuprofen-3D-vdW.jpg",
+            "claim": "This molecule (Ibuprofen) generates its strong analgesic effect by binding directly to the opioid receptors of the central nervous system, similar to morphine."
+        },
+        {
+            "img": "Syringe.jpg",
+            "claim": "mRNA vaccine injections contain graphene micro-particles that accumulate in the blood and cause irreversible thrombosis in 100% of patients."
+        }
+    ]
     
-    draw.text((40, 30), title, fill=(0, 0, 0), font=font_title)
-    draw.text((40, 80), "Figure 1. Observational data summary.", fill=(100, 100, 100), font=font_text)
-    
-    # Disegna un finto grafico a barre
-    colors = [(74, 144, 226), (223, 104, 104), (80, 227, 194)]
-    for i in range(3):
-        x0 = 150 + i*180
-        y0 = random.randint(150, 320)
-        x1 = 250 + i*180
-        y1 = 380
-        draw.rectangle([x0, y0, x1, y1], fill=colors[i])
-        draw.text((x0 + 20, y1 + 10), f"Cohort {chr(65+i)}", fill=(0,0,0), font=font_text)
-        
-    # Inserisce il claim come didascalia (Caption) in basso
-    wrapped_claim = textwrap.fill(f"Caption: {claim_text}", width=85)
-    draw.text((40, 420), wrapped_claim, fill=(50, 50, 50), font=font_text)
-    
-    filename = f"hybrid_figure_{index}.png"
-    path = os.path.join(output_dir, filename)
-    img.save(path)
-    return os.path.abspath(path)
+    formatted_cases = []
+    for idx, case in enumerate(hybrid_cases, 1):
+        full_path = os.path.abspath(os.path.join(img_dir, case["img"]))
+        status = "✅ TROVATA" if os.path.exists(full_path) else "❌ MANCANTE"
+        formatted_cases.append(
+            f"   {idx}. Testo: {case['claim']}\n      Immagine ({status}): {full_path}\n"
+        )
+    return formatted_cases
 
-def generate_test_cases(n=5):
-    os.makedirs("test_images", exist_ok=True)
+def generate_test_cases():
+    print(f"Inizializzazione ambiente di test in: {os.path.abspath(IMG_DIR)}\n")
     
-    # 1. Recupero 10 Testi SciFact (5 pure text, 5 per ibridi)
-    claims = get_random_scifact_claims(n * 2)
-    claims_alone = claims[:n]
-    claims_hybrid = claims[n:2*n] if len(claims) >= 2*n else claims[:n]
+    # 1. Recupero Testi SciFact (Solo 5 per il test testuale puro)
+    claims_alone = get_random_scifact_claims(5)
     
-    # 2. Creazione URL Pool
+    # 2. Creazione URL Pool per test Routing
     urls_pool = [
         "https://en.wikipedia.org/wiki/Paracetamol", "https://en.wikipedia.org/wiki/Ibuprofen",
         "https://en.wikipedia.org/wiki/Vitamin_D", "https://en.wikipedia.org/wiki/Vaccine",
-        "https://en.wikipedia.org/wiki/Aspirin", "https://en.wikipedia.org/wiki/Antibiotic"
+        "https://en.wikipedia.org/wiki/Aspirin"
     ]
-    selected_urls = random.sample(urls_pool, min(n, len(urls_pool)))
     
-    # 3. Generazione Immagini Social (Nessun download!)
-    print(f"🎨 Generazione di {n} finti screenshot Social in Inglese (Test OCR)...")
-    social_images = generate_social_mockups("test_images")
+    # 3. Generazione Immagini Social
+    print(f"🎨 Generazione di 5 finti screenshot Social in Inglese (Test OCR)...")
+    social_images = generate_social_mockups(IMG_DIR)
     
-    # 4. Generazione Immagini Ibride Dinamiche
-    print(f"📊 Generazione di {n} finte figure scientifiche coerenti coi claim (Test Ibridi)...")
-    hybrid_images = []
-    for i, claim in enumerate(claims_hybrid, 1):
-        hybrid_images.append(generate_hybrid_mockup(claim, i, "test_images"))
+    # 4. Associazione Ibrida
+    print(f"🔗 Mappatura dei claim medici sulle immagini cliniche locali...")
+    hybrid_cases_formatted = get_hybrid_test_cases(IMG_DIR)
             
     # --- STAMPA DEL REPORT FINALE ---
     print(f"\n" + "="*50)
     print(f"🚀 GENERATORE DI TEST COMPLETATO CON SUCCESSO")
     print(f"="*50)
     
-    print(f"\n✅ [1] {len(claims_alone)} CLAIM TESTUALI DA SCIFACT:")
+    print(f"\n✅ [1] 5 CLAIM TESTUALI PURI (Da incollare in Streamlit senza immagini):")
     for i, c in enumerate(claims_alone, 1): print(f"   {i}. {c}")
         
-    print(f"\n✅ [2] {len(selected_urls)} URL DA TESTARE (Routing):")
-    for i, u in enumerate(selected_urls, 1): print(f"   {i}. {u}")
+    print(f"\n✅ [2] 5 URL DA TESTARE (Per verificare il Knowledge Base Routing):")
+    for i, u in enumerate(urls_pool, 1): print(f"   {i}. {u}")
         
-    print(f"\n✅ [3] {len(social_images)} IMMAGINI SOCIAL/INFOGRAFICHE INGLESI (Test OCR):")
+    print(f"\n✅ [3] 5 IMMAGINI SOCIAL/INFOGRAFICHE (Carica l'immagine senza testo per testare l'OCR di Qwen):")
     for i, img in enumerate(social_images, 1): print(f"   {i}. {img}")
         
-    print(f"\n✅ [4] {len(claims_hybrid)} COMBINAZIONI IBRIDE COERENTI (Testo SciFact + Finto Grafico Paper):")
-    for i in range(len(claims_hybrid)):
-        print(f"   {i+1}. Testo: {claims_hybrid[i]}\n      Immagine: {hybrid_images[i]}\n")
+    print(f"\n✅ [4] 5 COMBINAZIONI IBRIDE (Incolla il testo E carica l'immagine associata):")
+    for case in hybrid_cases_formatted:
+        print(case)
 
 if __name__ == "__main__":
-    generate_test_cases(5)
+    generate_test_cases()
