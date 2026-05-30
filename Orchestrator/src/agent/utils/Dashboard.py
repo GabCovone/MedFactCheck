@@ -110,7 +110,7 @@ hr{border-color:rgba(99,179,237,0.1)!important;margin:12px 0!important;}
 .trace-step{position:relative;margin-bottom:18px;}
 .trace-dot{position:absolute;left:-22px;top:3px;width:10px;height:10px;border-radius:50%;background:#0ea5e9;box-shadow:0 0 8px rgba(14,165,233,0.6);border:2px solid #0284c7;}
 .trace-agent{font-size:13px;font-weight:600;color:#7dd3fc;margin-bottom:2px;}
-.trace-model{font-size:12px;color:#94a3b8;line-height:1.5;margin-bottom:4px;}
+.trace-model{font-size:12px;color:#94a3b8;line-height:1.5;margin-bottom:4px;white-space:pre-wrap;}
 .trace-chip{font-size:10px;padding:2px 7px;border-radius:10px;background:rgba(99,179,237,0.08);color:#7dd3fc;border:1px solid rgba(99,179,237,0.15);margin-right:4px;}
 .nv-header{background:linear-gradient(145deg,#0a1625,#0c1e35);border:1px solid rgba(99,179,237,0.15);border-radius:14px;padding:20px 22px;margin-bottom:16px;}
 .nv-title{font-size:18px;font-weight:700;color:#e2e8f0;margin-bottom:4px;}
@@ -300,7 +300,8 @@ for k, v in {
     "sel": None, "sec": "Verdict",
     "flt": "All", "kw": "", "thr": 0,
     "flt_date": "All time", "flt_src": "All",
-    "running": False, "error": None
+    "running": False, "error": None,
+    "trigger_verify": False
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -378,11 +379,6 @@ with st.sidebar:
     st.session_state.thr = thr
 
     st.markdown('<div class="glow-sep"></div>', unsafe_allow_html=True)
-    if st.button("＋  New check", use_container_width=True):
-        st.session_state.sel     = None
-        st.session_state.error   = None
-        st.session_state.running = False
-        st.rerun()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # BODY
@@ -435,9 +431,20 @@ with left:
 # ══════════════════════════════════
 with right:
 
+    # Top Bar con Bottone "New Check" in alto a destra
+    top_c1, top_c2 = st.columns([4, 1])
+    with top_c2:
+        if st.button("＋ New check", use_container_width=True, key="btn_new_check_top"):
+            st.session_state.sel     = None
+            st.session_state.error   = None
+            st.session_state.running = False
+            st.session_state.trigger_verify = False
+            st.rerun()
+
     # ── NESSUN CLAIM SELEZIONATO → input form ──────────────────────────────
     if st.session_state.sel is None:
-        st.markdown('<div class="page-title">🔍 New check</div>', unsafe_allow_html=True)
+        with top_c1:
+            st.markdown('<div class="page-title">🔍 New check</div>', unsafe_allow_html=True)
         st.markdown("""
         <div class="nv-header">
           <div class="nv-title">Enter a biomedical claim</div>
@@ -452,24 +459,32 @@ with right:
             "", height=120,
             placeholder="Es: Vitamin D supplementation reduces the risk of COVID-19 infection.",
             label_visibility="collapsed",
-            disabled=st.session_state.running
+            disabled=st.session_state.running,
+            key="claim_text_input"
         )
         
         # Aggiunta uploader per immagini
         uploaded_image = st.file_uploader(
             "🖼️ Attach image (Optional for multimodal analysis)", 
             type=["png", "jpg", "jpeg"],
-            disabled=st.session_state.running
+            disabled=st.session_state.running,
+            key="claim_image_input"
         )
 
         can_submit = bool(claim_text.strip() or uploaded_image is not None)
+
+        def handle_verify():
+            st.session_state.running = True
+            st.session_state.trigger_verify = True
+            st.session_state.error = None
 
         c1, c2, _ = st.columns([2, 1, 3])
         with c1:
             run_btn = st.button(
                 "▶  Verify claim", type="primary",
                 use_container_width=True,
-                disabled=st.session_state.running or not can_submit
+                disabled=st.session_state.running or not can_submit,
+                on_click=handle_verify
             )
         with c2:
             if st.button("✕", use_container_width=True, disabled=st.session_state.running):
@@ -481,9 +496,8 @@ with right:
             st.error(f"❌ Pipeline error: {st.session_state.error}")
 
         # ── Esecuzione ────────────────────────────────────────────────────
-        if run_btn and can_submit:
-            st.session_state.running = True
-            st.session_state.error   = None
+        if st.session_state.trigger_verify:
+            st.session_state.trigger_verify = False
             
             st.markdown("""
             <div class="pipeline-box">
@@ -548,6 +562,9 @@ with right:
 
     # ── CLAIM SELEZIONATO → visualizzazione ────────────────────────────────
     else:
+        with top_c1:
+            st.markdown('<div class="page-title">📋 Verified result</div>', unsafe_allow_html=True)
+
         r  = st.session_state.sel
         verdetto = r.get("final_verdict")
         
@@ -560,7 +577,6 @@ with right:
 
         vc = VC.get(verdetto, "nei")
 
-        st.markdown('<div class="page-title">📋 Verified result</div>', unsafe_allow_html=True)
         st.markdown(
             f'<div class="result-header">'
             f'<div class="rh-text">{r["original_text"]}</div>'
@@ -588,17 +604,16 @@ with right:
         st.markdown('<div class="glow-sep"></div>', unsafe_allow_html=True)
 
         # ── SELEZIONE SEZIONE ─────────────────────────────────────────────
-        sec = st.radio(
+        st.radio(
             "", ["Verdict", "Evidence", "Reasoning", "Agent trace"],
             horizontal=True,
-            index=["Verdict","Evidence","Reasoning","Agent trace"].index(st.session_state.sec),
-            label_visibility="collapsed"
+            key="sec",
+            label_visibility="collapsed",
         )
-        st.session_state.sec = sec
         st.markdown("")
 
         # ── VERDICT ──────────────────────────────────────────────────────
-        if sec == "Verdict":
+        if st.session_state.sec == "Verdict":
             svs = r.get("sub_verdicts", [])
             if len(svs) > 1:
                 st.markdown('<div class="sub-lbl">Sub-claim breakdown</div>', unsafe_allow_html=True)
@@ -616,7 +631,7 @@ with right:
                     unsafe_allow_html=True)
 
         # ── EVIDENCE ─────────────────────────────────────────────────────
-        elif sec == "Evidence":
+        elif st.session_state.sec == "Evidence":
             try:    passages = get_evidence(r.get("claim_id", ""))
             except: passages = []
 
@@ -656,7 +671,7 @@ with right:
                     unsafe_allow_html=True)
 
         # ── REASONING ────────────────────────────────────────────────────
-        elif sec == "Reasoning":
+        elif st.session_state.sec == "Reasoning":
             svs = r.get("sub_verdicts", [])
             for i, sv in enumerate(svs, 1):
                 if len(svs) > 1:
@@ -668,7 +683,7 @@ with right:
                 st.markdown(f'<div class="cot-box">{cot}</div>', unsafe_allow_html=True)
 
         # ── AGENT TRACE ───────────────────────────────────────────────────
-        elif sec == "Agent trace":
+        elif st.session_state.sec == "Agent trace":
             trace = r.get("agent_trace", [])
             if not trace:
                 st.info("Agent trace not available for this claim.")

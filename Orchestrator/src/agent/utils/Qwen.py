@@ -25,7 +25,7 @@ class Base_Qwen(ABC):
         pass
 
     @abstractmethod
-    def decide_tool(self, task_context: str, available_tools: list) -> str:
+    def decide_tool(self, task_context: str, available_tools: list) -> list:
         pass
 
 class QwenNF4(Base_Qwen):
@@ -92,7 +92,11 @@ class QwenNF4(Base_Qwen):
 
         # ESEMPIO 4: Routing per classificazioni farmaceutiche (Questo risolve il Test 6)
         {"role": "user", "content": [{"type": "text", "text": "Ibuprofen is a nonsteroidal anti-inflammatory drug. It drastically reduces joint pain."}]},
-        {"role": "assistant", "content": [{"type": "text", "text": "{\n  \"reasoning\": \"Extract pharmacological classification (kb) and clinical action (kb, lit).\",\n  \"sub_claims\": [\n    {\n      \"claim\": \"Ibuprofen is a nonsteroidal anti-inflammatory drug.\",\n      \"routes\": [\"kb\"]\n    },\n    {\n      \"claim\": \"Ibuprofen drastically reduces joint pain.\",\n      \"routes\": [\"kb\", \"lit\"]\n    }\n  ]\n}"}]}
+        {"role": "assistant", "content": [{"type": "text", "text": "{\n  \"reasoning\": \"Extract pharmacological classification (kb) and clinical action (kb, lit).\",\n  \"sub_claims\": [\n    {\n      \"claim\": \"Ibuprofen is a nonsteroidal anti-inflammatory drug.\",\n      \"routes\": [\"kb\"]\n    },\n    {\n      \"claim\": \"Ibuprofen drastically reduces joint pain.\",\n      \"routes\": [\"kb\", \"lit\"]\n    }\n  ]\n}"}]},
+
+        # ESEMPIO 5: Contraddizione Multimodale (Insegna al modello a smentire l'utente guardando l'immagine)
+        {"role": "user", "content": [{"type": "text", "text": "USER TEXT CLAIM: 'This is a fresh and perfectly healthy apple.'\nCRITICAL SYSTEM INSTRUCTION: You MUST also analyze the attached image. If the image visually contradicts the USER TEXT CLAIM, you must extract the true visual evidence as a sub-claim."}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "{\n  \"reasoning\": \"The text claims the apple is healthy, but visual analysis shows it is rotten. Extract both to allow fact-checking of the contradiction.\",\n  \"sub_claims\": [\n    {\n      \"claim\": \"This is a fresh and perfectly healthy apple.\",\n      \"routes\": [\"kb\"]\n    },\n    {\n      \"claim\": \"The attached visual evidence shows a rotten, decaying apple with irregular brown spots.\",\n      \"routes\": [\"kb\", \"lit\"]\n    }\n  ]\n}"}]}
     ]
 
         user_content = []
@@ -143,7 +147,7 @@ class QwenNF4(Base_Qwen):
         with torch.no_grad():
             generated_ids = self.model.generate(
                 **inputs,
-                max_new_tokens=2048,
+                max_new_tokens=4096,
                 temperature=0.1,
                 do_sample=True
             )
@@ -278,26 +282,28 @@ class QwenNF4(Base_Qwen):
 
     def build_tool_decision_prompt(self, task_context: str, available_tools: list) -> list:
         tools_str = ", ".join(available_tools)
-        system_prompt = f"""You are an autonomous decision maker in a medical tool-calling system. Your task is to select the most appropriate tool to solve the current task.
+        system_prompt = f"""You are an autonomous decision maker in a medical tool-calling system. Your task is to select the most appropriate tools to solve the current task based on the provided inputs.
         The available tools are: [{tools_str}].
-        Reply EXCLUSIVELY with the NAME OF THE TOOL chosen, without any additional explanation. If no tool is suitable, reply "nessuno"."""
+        Reply EXCLUSIVELY with a valid JSON array containing the NAMES OF THE TOOLS chosen, without any additional explanation."""
         
         messages = [
             {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
             
             # Esempi per Agente Ingestion
-            {"role": "user", "content": [{"type": "text", "text": "Task: The user provided this raw input: 'https://en.wikipedia.org/wiki/Paracetamol...'. You need to understand if it's a link to a website, a path to an image file, or normal text."}]},
-            {"role": "assistant", "content": [{"type": "text", "text": "scrape_text_from_url"}]},
-            {"role": "user", "content": [{"type": "text", "text": "Task: The user provided this raw input: '/home/user/images/chest_xray.png...'. You need to understand if it's a link to a website, a path to an image file, or normal text."}]},
-            {"role": "assistant", "content": [{"type": "text", "text": "validate_image"}]},
-            {"role": "user", "content": [{"type": "text", "text": "Task: The user provided this raw input: 'Aspirin cures headaches...'. You need to understand if it's a link to a website, a path to an image file, or normal text."}]},
-            {"role": "assistant", "content": [{"type": "text", "text": "nessuno"}]},
+            {"role": "user", "content": [{"type": "text", "text": "Task: The user provided this raw text input: 'https://en.wikipedia.org/wiki/Paracetamol...'. Select 'scrape_text_from_url' if the text is a web link. Select 'validate_image' if an image path is provided or if the text itself is an image path. Select 'process_plain_text' if it's a normal medical claim. You can select multiple tools if needed."}]},
+            {"role": "assistant", "content": [{"type": "text", "text": '["scrape_text_from_url"]'}]},
+            {"role": "user", "content": [{"type": "text", "text": "Task: The user provided this raw text input: '/home/user/images/chest_xray.png...'. Select 'scrape_text_from_url' if the text is a web link. Select 'validate_image' if an image path is provided or if the text itself is an image path. Select 'process_plain_text' if it's a normal medical claim. You can select multiple tools if needed."}]},
+            {"role": "assistant", "content": [{"type": "text", "text": '["validate_image"]'}]},
+            {"role": "user", "content": [{"type": "text", "text": "Task: The user provided this raw text input: 'Aspirin cures headaches...'. Select 'scrape_text_from_url' if the text is a web link. Select 'validate_image' if an image path is provided or if the text itself is an image path. Select 'process_plain_text' if it's a normal medical claim. You can select multiple tools if needed."}]},
+            {"role": "assistant", "content": [{"type": "text", "text": '["process_plain_text"]'}]},
+            {"role": "user", "content": [{"type": "text", "text": "Task: The user provided this raw text input: 'Aspirin cures headaches...' and this image path: '/tmp/img.png'. Select 'scrape_text_from_url' if the text is a web link. Select 'validate_image' if an image path is provided or if the text itself is an image path. Select 'process_plain_text' if it's a normal medical claim. You can select multiple tools if needed."}]},
+            {"role": "assistant", "content": [{"type": "text", "text": '["process_plain_text", "validate_image"]'}]},
 
             {"role": "user", "content": [{"type": "text", "text": f"Task: {task_context}"}]}
         ]
         return messages
 
-    def decide_tool(self, task_context: str, available_tools: list) -> str:
+    def decide_tool(self, task_context: str, available_tools: list) -> list:
         messages = self.build_tool_decision_prompt(task_context, available_tools)
         text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         
@@ -305,7 +311,7 @@ class QwenNF4(Base_Qwen):
 
         with torch.no_grad():
             generated_ids = self.model.generate(
-                **inputs, max_new_tokens=15, temperature=0.1, do_sample=False
+                **inputs, max_new_tokens=30, temperature=0.1, do_sample=False
             )
 
         generated_ids_trimmed = [out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)]
@@ -315,4 +321,14 @@ class QwenNF4(Base_Qwen):
         torch.cuda.empty_cache()
         gc.collect()
         
-        return response.strip()
+        try:
+            clean_resp = response.strip()
+            if clean_resp.startswith("```json"): clean_resp = clean_resp[7:]
+            if clean_resp.startswith("```"): clean_resp = clean_resp[3:]
+            if clean_resp.endswith("```"): clean_resp = clean_resp[:-3]
+            tools = json.loads(clean_resp.strip())
+            if isinstance(tools, list): return tools
+            return []
+        except json.JSONDecodeError:
+            print(f"⚠️ Errore parsing tool JSON: {response}")
+            return []

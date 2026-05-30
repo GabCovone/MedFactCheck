@@ -1,6 +1,7 @@
 from typing import Any, Dict
 from langchain_core.messages import AIMessage
 from langchain_core.tools import tool
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 class RetrieverAgent:
     """
@@ -45,35 +46,62 @@ class RetrieverAgent:
         else:
             return ["kb_faiss"]
 
+    def _retrieve_for_one_claim(self, sub_claim: str, routes: list) -> tuple[str, list]:
+        """
+        Esegue l'intero processo di retrieval per un singolo sub-claim.
+        Questa funzione è progettata per essere eseguita in un thread separato.
+        """
+        tool_names = self._route_to_tools(routes)
+        print(f" -> [Thread] Avvio retrieval per '{sub_claim[:40]}...'. Tools: {', '.join(tool_names)}")
+        
+        docs = []
+        # Eseguiamo tutti i tool richiesti e accumuliamo i risultati
+        for t_name in tool_names:
+            if t_name in self.available_tools:
+                try:
+                    tool_results = self.available_tools[t_name].invoke({"query": sub_claim})
+                    docs.extend(tool_results)
+                except Exception as e:
+                    print(f"    - ❌ Errore durante l'esecuzione del tool {t_name} per '{sub_claim[:40]}...': {e}")
+        
+        # GESTIONE FALLIMENTI (Fallback)
+        if not docs:
+            print(f" ⚠️ Nessun risultato per '{sub_claim[:40]}...'. Attivo Fallback Globale.")
+            try:
+                docs = self.retriever_instance.retrieve(sub_claim, ["kb", "lit"])
+            except Exception as e:
+                print(f"    - ❌ Errore durante il Fallback Globale per '{sub_claim[:40]}...': {e}")
+            
+        print(f"    -> [Thread] Trovati {len(docs)} documenti per '{sub_claim[:40]}...'.")
+        return sub_claim, docs
+
     def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        print("\n[AGENTE RETRIEVER] Avvio ricerca guidata (Guided Execution Multi-Tool).")
+        print("\n[AGENTE RETRIEVER] Avvio ricerca guidata parallela per tutti i sub-claim.")
         sub_claims = state.get("sub_claims", [])
         routing_info = state.get("routing_info", {})
         
         retrieved_docs = {}
-        for sc in sub_claims:
-            rotte_suggerite = routing_info.get(sc, ["kb"])
-            tool_names = self._route_to_tools(rotte_suggerite)
+        
+        with ThreadPoolExecutor(max_workers=len(sub_claims) if sub_claims else 1) as executor:
+            future_to_sc = {
+                executor.submit(self._retrieve_for_one_claim, sc, routing_info.get(sc, ["kb"])): sc 
+                for sc in sub_claims
+            }
             
-            print(f" -> [ROUTING] Rotta '{rotte_suggerite}'. Eseguo i tools: {', '.join(tool_names)}")
+            for future in as_completed(future_to_sc):
+                try:
+                    sc, docs = future.result()
+                    retrieved_docs[sc] = docs
+                except Exception as e:
+                    sc = future_to_sc[future]
+                    print(f"❌ Errore critico nel thread di retrieval per '{sc}': {e}")
+                    retrieved_docs[sc] = []
+
+        print(f"\n✅ Ricerca parallela completata. Recuperate evidenze per {len(retrieved_docs)}/{len(sub_claims)} sub-claims.")
             
-            docs = []
-            # Eseguiamo tutti i tool richiesti e accumuliamo i risultati
-            for t_name in tool_names:
-                if t_name in self.available_tools:
-                    print(f"    - Lancio {t_name}...")
-                    tool_results = self.available_tools[t_name].invoke({"query": sc})
-                    docs.extend(tool_results)
-            
-            # GESTIONE FALLIMENTI (Fallback)
-            if not docs:
-                print(f" ⚠️ Nessun risultato utile. Attivo Fallback Globale su tutti i rami...")
-                docs = self.retriever_instance.retrieve(sc, ["kb", "lit"])
-                
-            retrieved_docs[sc] = docs
-            print(f"    ✅ Trovati {len(docs)} documenti combinati per questo sub-claim.")
-            
+        log_details = "\n".join([f"  - '{sc[:60]}...': trovati {len(docs)} documenti." for sc, docs in retrieved_docs.items()])
+        log_message = f"Ricerca ibrida (KB/LIT) completata per {len(sub_claims)} sub-claims. Dettagli:\n{log_details}"
         return {
             "retrieved_docs": retrieved_docs,
-            "messages": [AIMessage(content=f"Ricerca completata per {len(sub_claims)} sub-claims.", name="Retriever")]
+            "messages": [AIMessage(content=log_message, name="Retriever")]
         }

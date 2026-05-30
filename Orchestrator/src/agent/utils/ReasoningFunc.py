@@ -46,7 +46,9 @@ class ReasonerAgent:
             
             reasoning_outputs[sc] = cot
             
+        log_details = "\n".join([f"  - '{sc[:60]}...' -> Generato CoT ({len(cot.split())} parole)." for sc, cot in reasoning_outputs.items()])
+        log_message = f"Ho completato il ragionamento logico (Chain-of-Thought) basato sulle evidenze per {len(reasoning_outputs)} sub-claims:\n{log_details}\nSi può procedere con il modulo di Veracity."
         return {
             "reasoning_output": reasoning_outputs,
-            "messages": [AIMessage(content="Ho completato il ragionamento logico (CoT) per i sub-claims. Si può procedere con la veridicità.", name="Reasoner")]
+            "messages": [AIMessage(content=log_message, name="Reasoner")]
         }

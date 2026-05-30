@@ -125,12 +125,19 @@ class SupervisorAgent:
             print(f"[SUPERVISORE] Errore nell'inferenza, termino. Dettagli: {e}")
             scelta = "FINISH"
             
+        log_msg = f"Valutazione dello stato completata. Il prossimo task è assegnato a: '{scelta}'." if scelta != "FINISH" else "Elaborazione completata. Flusso terminato."
+            
         if scelta == "FINISH" and claim_id:
             agent_trace = [f"[{m.name}]: {m.content}" for m in state.get("messages", []) if hasattr(m, 'name')]
+            agent_trace.append(f"[Supervisor]: {log_msg}")
             self.storage_instance.aggregate_final_verdict(claim_id, agent_trace=agent_trace)
             
         print(f"[SUPERVISORE] Smisto il task a: {scelta}")
-        return {"next_agent": scelta, "claim_id": claim_id}
+        return {
+            "next_agent": scelta, 
+            "claim_id": claim_id,
+            "messages": [AIMessage(content=log_msg, name="Supervisor")]
+        }
 
 
 # 5. COSTRUZIONE DEL GRAFO A STELLA (HUB & SPOKE)
@@ -180,6 +187,7 @@ multi_agent_graph = builder.compile(checkpointer=memory_saver)
 
 async def main():
     print("🚀 Avvio Sistema Multi-Agente MedFactCheck...")
+    storage_instance.ensure_indexes()
     import uuid
     
     while True:

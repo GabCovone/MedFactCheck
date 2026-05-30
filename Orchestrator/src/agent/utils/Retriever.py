@@ -86,6 +86,8 @@ class KBBranchInitializer:
             self.faiss_index.add(embeddings)
             for path in self.faiss_paths:
                 faiss.write_index(self.faiss_index, path)
+            del embeddings
+            gc.collect()
             torch.cuda.empty_cache()
 
     def _load_with_fallback(self, paths, load_func, mode):
@@ -267,6 +269,8 @@ class MedFactCheckRetriever:
         self.lit_node = LitBulkRetrieverNode(shared_embedder=self.embedder)
 
         print("\n✅ SISTEMA DI RETRIEVAL PRONTO E ALLINEATO.")
+        gc.collect()
+        torch.cuda.empty_cache()
 
     def retrieve(self, claim: str, routes: list) -> list:
         final_evidence = []
