@@ -2,6 +2,7 @@ import asyncio
 import os
 import sys
 import tempfile
+import base64
 from datetime import datetime, timedelta
 import io
 
@@ -585,6 +586,15 @@ with right:
             f'<div style="flex:1;max-width:200px;">{conf_bar(r.get("avg_confidence",0), vc)}</div>'
             f'</div></div>',
             unsafe_allow_html=True)
+
+    if r.get("image_b64"):
+        with st.expander("🖼️ View attached image", expanded=True):
+            try:
+                b64_data = r["image_b64"].split(",")[1] if "," in r["image_b64"] else r["image_b64"]
+                img_bytes = base64.b64decode(b64_data)
+                st.image(img_bytes, use_container_width=True)
+            except Exception as e:
+                st.error(f"Error loading image: {e}")
 
         back, pdf_col, *_ = st.columns([1, 2, 2])
         with back:

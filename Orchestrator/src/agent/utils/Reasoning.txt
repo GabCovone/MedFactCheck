@@ -18,7 +18,18 @@ L'agente (basato su un prompt specifico inviato a **Qwen2.5-VL-7B-Instruct**) ri
 1. Il singolo **sub-claim** atomico prodotto dal Decomposer.
 2. I **top-k paragrafi di evidenza** (chunk) recuperati e rerankati dal Retriever.
 
-Attraverso un prompt strutturato *Few-Shot*, al modello viene richiesto di sintetizzare i risultati clinici riportati nell'evidenza, relazionarli esplicitamente con il claim e mettere in risalto discrepanze di magnitudo, iperboli, correlazioni errate o conferme empiriche.
+Attraverso un prompt strutturato, al modello viene richiesto di sintetizzare i risultati clinici riportati nell'evidenza, relazionarli esplicitamente con il claim e mettere in risalto discrepanze di magnitudo, iperboli, correlazioni errate o conferme empiriche. 
+Per favorire un output più narrativo e articolato rispetto all'estrazione rigida, il parametro di `temperature` del modello viene specificamente innalzato a `0.3`.
+
+### 2.1 Architettura Map-Reduce (Inferenza Gerarchica)
+Una delle sfide più complesse nell'uso dei LLM per il reasoning documentale è la cosiddetta *Lost in the Middle*: quando vengono forniti troppi documenti contemporaneamente, il modello tende a dimenticare le informazioni centrali.
+Per ovviare a questo problema e scalare su un numero arbitrario di evidenze recuperate, l'agente Reasoner implementa un rigoroso pattern **Map-Reduce iterativo**:
+- **Chunking delle Evidenze:** I documenti recuperati vengono suddivisi in *batch* di grandezza fissa (max 4 passaggi per volta).
+- **Distillazione (Map):** Il modello genera un'analisi intermedia per ciascun batch, condensando le informazioni chiave e scartando il rumore.
+- **Sintesi Finale (Reduce):** Le analisi intermedie diventano il nuovo input per un'ulteriore generazione, distillando la conoscenza a piramide fino a produrre la singola Chain-of-Thought definitiva.
+
+### 2.2 Short-Circuit per Assenza di Evidenze (Edge Case)
+Per ottimizzare i tempi di calcolo e non gravare sull'hardware per task impossibili, l'agente implementa un controllo preventivo (*Defensive Programming*). Se il Retriever restituisce 0 documenti per un determinato sub-claim, il Reasoner salta completamente la chiamata al modello linguistico. Invece, genera in modo deterministico una stringa standard di "*Not Enough Information (NEI)*", passando immediatamente il controllo al nodo successivo.
 
 ### Esempio Operativo
 > **Claim:** "Il farmaco X causa un'impennata di morti per infarto in tutti i pazienti."  

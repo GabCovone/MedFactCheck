@@ -10,10 +10,10 @@ Per garantire la massima flessibilità e scalabilità, l'orchestrazione non si b
 
 Per simulare in modo accurato un ambiente di produzione *Enterprise* (e permettere il testing ottimale su infrastrutture cloud), il sistema è stato ingegnerizzato separando nettamente il livello di presentazione dal motore di calcolo:
 
-1. **Server Back-End (`api.py` / Orchestrator)**: Un server asincrono ad alte prestazioni basato su **FastAPI** e `uvicorn`. Ha il monopolio esclusivo sull'hardware (allocazione VRAM di Qwen e DeBERTa, caricamento degli indici FAISS, modelli di inferenza). Rimane in ascolto sul path `/verify` accettando richieste HTTP POST asincrone contenenti payload testuali e buffer di immagini multimediali (`UploadFile`).
+1. **Server Back-End (`api.py` / Orchestrator)**: Un server asincrono ad alte prestazioni basato su **FastAPI** e `uvicorn`. Ha il monopolio esclusivo sull'hardware. Rimane in ascolto sul path `/verify` accettando richieste HTTP POST asincrone contenenti payload testuali e/o buffer di immagini mediche (`UploadFile`), salvandole temporaneamente in totale sicurezza.
 2. **Client Front-End (`Dashboard.py`)**: Un'interfaccia ultra-leggera in Streamlit che delega il carico computazionale all'API tramite chiamate `requests.post`, interrogando poi localmente MongoDB per renderizzare le metriche e i risultati in tempo reale.
 
-Questo disaccoppiamento risponde direttamente ai requisiti di **Scalabilità**: il server può scalare verticalmente o orizzontalmente indipendentemente dal numero di dashboard connesse, elaborando dozzine di *request* concorrenti senza bloccare l'interfaccia utente.
+Questo disaccoppiamento risponde direttamente ai requisiti di **Scalabilità**: il server può scalare verticalmente o orizzontalmente indipendentemente dal numero di dashboard connesse, elaborando *request* concorrenti senza bloccare l'interfaccia utente.
 
 ---
 
@@ -33,21 +33,32 @@ La logica decisionale risiede nel file `multi_agent.py` (e nei componenti defini
       (Tool Calling JSON)       (Ramo KB / Ramo LIT)     (Map-Reduce / Cross-Encoder)
 ```
 
+### 2.1 Gestione dello Stato Globale (MultiAgentState) 
+Nei sistemi multi-agente, la comunicazione non avviene tramite chiamate dirette tra funzioni, ma attraverso la mutazione di uno stato condiviso. Il sistema definisce un TypedDict rigoroso che fa da "memoria a breve termine". 
+Questo stato contiene la storia conversazionale (messages), l'input multimodale (claim_input), e chiavi specifiche che i singoli nodi popolano in sequenza (sub_claims, retrieved_docs, reasoning_output, veracity_results). 
+
+### 2.2 Dependency Injection e Ottimizzazione VRAM 
+Per prevenire la frammentazione della VRAM e il rischio di Out of Memory (OOM), l'architettura implementa il pattern della Dependency Injection. 
+I modelli Deep Learning (Qwen in formato NF4, DeBERTa, e il SentenceTransformer in FP16) vengono istanziati una sola volta a livello globale all'avvio del server. 
+I puntatori a queste istanze vengono poi iniettati nelle classi degli agenti, garantendo che le risorse hardware siano condivise in modo efficiente tra tutti i thread operativi.
+
 ### Il Ruolo dell'Orchestratore (Il Sistema nel suo Complesso)
 L'**Orchestratore** è il macro-componente che incapsula le API FastAPI, le connessioni ai database (MongoDB, FAISS) e l'istanza del grafo LangGraph. Si occupa di:
 - Ricevere le richieste di fact-checking dal client e validare gli input (es. testo del claim o eventuali allegati).
-- Gestire la memoria a lungo e breve termine, e la persistenza dello stato delle conversazioni (tramite `langgraph-checkpoint-mongodb`).
+- Gestire la persistenza dello stato e la *Fault Tolerance* (tramite `langgraph-checkpoint-mongodb`).
 - Fornire e allocare le risorse hardware necessarie agli agenti (modelli AI in esecuzione locale o remota).
 - Raccogliere e confezionare il responso finale formattato da restituire al client.
 
+*Nota sull'Esecuzione:* Mentre l'endpoint FastAPI è puramente asincrono (`async def`), l'esecuzione dei nodi di LangGraph e gli accessi CRUD su MongoDB (PyMongo) avvengono in modo deterministico e sincrono. Questa scelta architetturale previene *race-condition* durante l'aggiornamento simultaneo dei sub-claims sul database.
+
 ### Il Ruolo del Supervisore (Il "Cervello" del Grafo)
-Il **Supervisor** è un agente primario, mosso da un LLM avanzato (come Qwen2.5), specializzato nel ragionamento orchestrato e nel routing dinamico. Funziona letteralmente come il direttore d'orchestra all'interno del processo di verifica:
+Il **Supervisor** è un agente primario, mosso da un LLM avanzato (Qwen2.5), specializzato nel ragionamento orchestrato e nel routing dinamico. Funziona letteralmente come il direttore d'orchestra all'interno del processo di verifica:
 1. **Analisi Iniziale e Delega**: Non appena il claim entra nel grafo, viene valutato dal Supervisor. Questo decide quale "specialista" (Spoke) chiamare in base al task da compiere. Ad esempio, stabilisce se un claim è sufficientemente semplice da passare dritto al `Retriever`, oppure se necessita di essere diviso in più parti dal `Decomposer`.
 2. **Controllo dello Stato**: Al termine del lavoro di ciascun nodo operativo, il flusso ritorna obbligatoriamente al Supervisor. Esso valuta l'output ricevuto dallo specialista e decide la prossima mossa (es. i documenti recuperati bastano? Se sì, vai al `Reasoner`, se no, esegui nuovamente il `Retriever` usando parametri diversi).
 3. **Terminazione**: Una volta che l'intero workflow porta a un risultato solido (giudizio calcolato sul claim), il Supervisor dichiara chiusa l'esecuzione, facendo in modo che lo stato finale esca dal grafo.
 
 ### I Nodi Operativi (Spoke)
-- **Decomposer**: Si attiva per analizzare claim molto complessi o formati da più affermazioni congiunte. Le suddivide in *sub-claims* atomici e testabili singolarmente, facilitando il reperimento delle fonti. Produce generalmente un output strutturato (JSON) invocando dei *Tool*.
+- **Decomposer**: Modulo multimodale (Vision-Language). Si attiva per analizzare testi complessi, articoli via URL o referti medici per immagini. Li suddivide in *sub-claims* atomici e testabili singolarmente (JSON) invocando dinamicamente strumenti esterni (Tool Calling).
 - **Retriever**: L'agente di ricerca delle evidenze scientifiche/mediche a supporto o smentita del claim. In MedFactCheck può operare lungo due direttrici:
   - **Ramo KB**: Interroga Knowledge Base interne altamente strutturate sfruttando le potenzialità della Retrieval-Augmented Generation (RAG) mediante indici vettoriali (es. FAISS) o classici (BM25).
   - **Ramo LIT**: Raccoglie evidenze dalla letteratura e database esterni interrogabili se i documenti locali non sono sufficienti.
@@ -58,12 +69,13 @@ Il **Supervisor** è un agente primario, mosso da un LLM avanzato (come Qwen2.5)
 
 ## 🚀 3. Flusso Tipico di Esecuzione (Workflow)
 
-Per comprendere meglio come i componenti collaborino in sincrono, ecco il ciclo di vita standard di una richiesta:
+Per comprendere meglio come i componenti collaborino, di seguito il ciclo di vita di una richiesta all'interno del grafo LangGraph:
 
-1. **Richiesta Iniziale**: L'utente inserisce un'affermazione sospetta sulla dashboard (es. "L'aspirina cura definitivamente l'influenza"), che invia una POST all'Orchestratore (API).
-2. **Presa in Carico**: L'Orchestratore fa partire la macchina LangGraph. Il claim viene inserito nello stato condiviso.
-3. **Routing (Supervisor)**: Il Supervisor ispeziona il claim. Essendo un claim unitario, salta il Decomposer e comanda al Retriever di cercare prove al riguardo.
-4. **Recupero (Retriever)**: Il Retriever esegue query sui database vettoriali/letteratura, estrae 5 documenti medici o *abstracts* pertinenti e cede di nuovo il turno al Supervisor.
-5. **Ragionamento (Supervisor -> Reasoner)**: Il Supervisor verifica che i 5 documenti siano stati ottenuti, e demanda al Reasoner il compito di leggerli per estrarne il significato profondo, mettendoli in relazione col claim.
-6. **Giudizio (Veracity)**: Il Reasoner condensa le informazioni; il blocco Veracity applica il modello Cross-Encoder calcolando la sentenza finale: "Refuted" (Confidenza: 99.2%).
-7. **Risposta e Salvataggio (Orchestratore)**: Il Supervisor riconosce che il workflow è terminato. L'Orchestratore impacchetta i risultati, salva permanentemente tutto in MongoDB e risponde con successo alla Dashboard, che mostra a schermo i dati.
+1. **Richiesta Iniziale**: L'utente inserisce un'affermazione sospetta o carica la foto di un referto sulla dashboard, che invia una POST all'Orchestratore (API).
+2. **Presa in Carico e Stato Iniziale**: L'Orchestratore avvia la macchina LangGraph. Gli input grezzi (testo o path immagini) vengono inseriti nel `MultiAgentState` iniziale.
+3. **Valutazione Iniziale (Supervisor)**: Il Supervisor ispeziona lo stato (inizialmente privo di operazioni pregresse) e deduce che l'input grezzo deve essere processato. Smista il controllo al nodo Decomposer.
+4. **Ingestion & Decomposizione (Decomposer)**: Il nodo sceglie autonomamente quali tool eseguire (es. web scraping, validazione visiva). Successivamente scompone l'input in *sub-claims* atomici, assegnando a ciascuno una direttiva di ricerca (`routes`). Il flusso torna al Supervisor.
+5. **Recupero Evidenze (Supervisor -> Retriever)**: Il Supervisor legge i *sub-claims* estratti e demanda al Retriever il recupero dati. Il Retriever lancia thread paralleli per interrogare le Knowledge Base e la letteratura medica, salvando i documenti pertinenti per ogni sub-claim. Il flusso torna al Supervisor.
+6. **Ragionamento (Supervisor -> Reasoner)**: Il Supervisor verifica che le evidenze siano state recuperate e incarica il Reasoner di analizzarle. Quest'ultimo applica il pattern Map-Reduce per condensare il significato profondo dei documenti recuperati, producendo una Chain-of-Thought (CoT). Il flusso torna al Supervisor.
+7. **Giudizio NLI (Supervisor -> Veracity)**: Il Supervisor invia i risultati elaborati al nodo finale. Veracity usa il Cross-Encoder per allineare semanticamente i claim alle prove e ai ragionamenti, emettendo la sentenza finale (es. "Refuted" al 99.2%). Il flusso torna al Supervisor.
+8. **Terminazione e Salvataggio (Supervisor -> FINISH)**: Il Supervisor riconosce che tutti i passaggi logici sono stati completati con successo e chiude il grafo. Durante l'intero ciclo, l'Orchestratore salva progressivamente i log e i verdetti su MongoDB, restituendo infine l'ID definitivo alla Dashboard.

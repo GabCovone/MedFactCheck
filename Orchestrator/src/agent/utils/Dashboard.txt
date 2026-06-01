@@ -18,6 +18,27 @@ Le sue responsabilità principali includono:
 
 ---
 
+## 🎨 Struttura dell'Interfaccia (Layout e Navigazione)
+
+L'interfaccia è suddivisa in aree logiche per massimizzare la *Usability* e la *Transparency*, in pieno allineamento con le metriche di valutazione del progetto:
+
+- **Sidebar (Statistiche e Filtri):** Mostra un aggregato in tempo reale dei claim analizzati (Total, Supported, Refuted, NEI) per una visione globale. Permette di interrogare lo storico combinando filtri per Keyword, Verdetto, Fonte (es. Europe PMC, DisGeNET), Finestra Temporale e Soglia di Confidenza (Slider 0-100%).
+- **Pannello Sinistro (Storico):** Una coda dinamica e scrollabile che mostra i claim più recenti e pertinenti ai filtri applicati, pronti per essere ricaricati e ispezionati istantaneamente.
+- **Pannello Centrale (Input e Analisi):** 
+  - Presenta un form **Multimodale** per inserire sia testo libero/URL sia per caricare referti medici in formato immagine (PNG/JPG).
+  - Durante l'esecuzione, un monitor dedicato mostra lo stato di avanzamento della pipeline LangGraph in esecuzione sul server.
+  - A fine elaborazione, offre una visualizzazione a schede (*Radio Tabs*) per esplorare in profondità i risultati: **Verdict** (breakdown dei sub-claims), **Evidence** (paragrafi recuperati con link diretti ai paper originali), **Reasoning** (il log della *Chain-of-Thought*) e **Agent Trace** (i log dettagliati di *routing* del Supervisore e degli agenti).
+
+---
+
+## 🛡️ Gestione degli Errori (Defensive Programming)
+
+Il Front-End è ingegnerizzato per resistere a eventuali instabilità del Back-End. Include controlli di *Defensive Programming* per gestire:
+- **LLM Token Limit / Truncation:** Se il modello generativo (es. Qwen) si interrompe bruscamente per aver raggiunto il limite di token senza restituire un JSON valido, la Dashboard rileva elegantemente l'assenza del verdetto evitando crash applicativi (come i classici `KeyError`) e avvisando l'utente.
+- **Timeout e I/O Sicuro:** Gestione sicura delle disconnessioni e rimozione deterministica in blocco `finally` delle immagini temporanee salvate in RAM per evitare *memory leaks* lato client.
+
+---
+
 ## 🏗️ I Vantaggi del Disaccoppiamento
 
 Mantenere la Dashboard Streamlit come client separato assicura enormi vantaggi in termini di **Scalabilità**:

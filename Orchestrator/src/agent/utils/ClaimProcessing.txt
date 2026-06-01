@@ -11,16 +11,18 @@ L'agente è mosso dal LLM **Qwen2.5-VL-7B-Instruct**, configurato per operare na
 ### Fasi Operative:
 
 #### Fase 1: Tool Selection (Routing Dinamico dell'Input)
-L'agente ispeziona l'input grezzo (un testo, un link web, o il percorso di un'immagine temporanea). Sfruttando le sue capacità decisionali e il pattern di tool-calling, seleziona autonomamente lo strumento più appropriato:
+L'agente ispeziona l'input grezzo (un testo, un link web, o il percorso di un'immagine temporanea). Sfruttando le sue capacità decisionali e il pattern di tool-calling avanzato, restituisce un **Array JSON** contenente gli strumenti necessari, permettendo esecuzioni parallele (es. scaricare un articolo e contemporaneamente analizzare un referto allegato). I tool disponibili sono:
 - `scrape_text_from_url`: Se rileva un link, scarica e pulisce il contenuto HTML della pagina web.
 - `validate_image`: Se rileva il path di un'immagine, la valida per l'analisi visiva.
-- `nessuno`: Se l'utente ha inserito testo libero, procede direttamente all'analisi logica.
+- `process_plain_text`: Se l'utente ha inserito testo libero o un normale claim medico, lo identifica esplicitamente per l'analisi testuale.
 
-#### Fase 2: Elaborazione Multimodale (Vision-Language)
-Se l'input è (o contiene) un'immagine medica (es. radiografie, grafici di paper, screenshot di social media), il modello utilizza la sua architettura *Vision* integrata per "guardare" l'immagine ed estrarne il contesto testuale, medico o visivo senza bisogno di moduli OCR esterni, minimizzando i tassi di errore sui referti.
+#### Fase 2: Elaborazione Multimodale e Anti-Bias (Vision-Language)
+Se l'input include un'immagine medica (es. radiografie, grafici di paper, screenshot di social media), il modello utilizza la sua architettura *Vision* integrata per "guardare" l'immagine ed estrarne il contesto senza bisogno di moduli OCR esterni.
+**Risoluzione delle Contraddizioni (Anti-Bias):** Tramite una complessa ingegnerizzazione dei prompt (*Few-Shot Prompting* dedicato), l'agente è stato specificamente addestrato a riconoscere le discrepanze. Se l'utente fornisce un testo fuorviante (es. "Questa lesione è innocua") ma l'immagine mostra chiaramente una patologia (es. un Melanoma), il modello dà priorità all'evidenza visiva, estraendo la contraddizione come sub-claim indipendente per permetterne la smentita.
 
 #### Fase 3: Decomposizione (Atomic Claim Extraction)
-I testi complessi o ambigui vengono scomposti in **proposizioni dichiarative indipendenti** (Soggetto + Verbo + Oggetto).
+I testi complessi o ambigui vengono scomposti in **proposizioni dichiarative indipendenti** (Soggetto + Verbo + Oggetto). Per prevenire il troncamento della generazione e i crash per *Token Limit* (frequenti con input troppo lunghi come intere pagine Wikipedia), l'agente è limitato all'estrazione di un **massimo di 5 sub-claims principali**, filtrando automaticamente i dettagli irrilevanti.
+
 *Esempio:*
 > Input: "La radice magica contiene vitamina C e cura il cancro al polmone."
 > Output:

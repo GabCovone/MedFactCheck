@@ -201,16 +201,20 @@ class QwenNF4(Base_Qwen):
         {evidence_text}
         
         REASONING INSTRUCTIONS (Chain-of-Thought):
-        Write a detailed and discursive analysis (about 100-150 words). In your text you must:
+        Write a highly detailed and verbose discursive analysis (about 150-200 words). In your text you must:
         1. Synthesize what the provided scientific evidence clearly states.
         2. Explicitly relate the concepts of the evidence to the claim.
         3. Conclude unequivocally whether the evidence supports, refutes, or does not offer sufficient details to confirm the claim.
-        Do not use bullet points, write a logical and cohesive paragraph.
+        CRITICAL INSTRUCTION: You are a medical classifier. Your task is to evaluate whether the provided evidence confirms or refutes the claim.
+        - Use 'Supported' if the evidence clearly confirms the clinical core of the claim (even if using synonyms).
+        - Use 'Refuted' if the evidence clearly contradicts the claim.
+        - Use 'Not Enough Information' ONLY IF the evidence is vague, irrelevant, or lacks the specific details to confirm the user's statement.
+        Do not use bullet points, write a logical, verbose, and cohesive paragraph.
         
         DETAILED LOGICAL ANALYSIS:"""
 
         messages = [
-            {"role": "system", "content": [{"type": "text", "text": "You are a rigorous, verbose, and impartial scientific analyst. Your goal is to explain the logical reasoning in detail."}]},
+            {"role": "system", "content": [{"type": "text", "text": "You are a rigorous, verbose, and impartial scientific analyst. Your goal is to explain the logical reasoning in extreme detail, focusing on the clinical core of the claim."}]},
             {"role": "user", "content": [{"type": "text", "text": prompt_text}]}
         ]
 

@@ -49,13 +49,12 @@ Il modello viene forzato in mezza precisione (`torch.float16`), riducendo l'impr
 
 **Perché è stato necessario correggere l'ambiente software:** Durante l'aggiornamento dei runtime di Google Colab a NumPy 2.x, le vecchie distribuzioni binarie di FAISS causavano crash sistematici a causa di incompatibilità dell'interfaccia C-API. Il sistema è stato stabilizzato forzando l'installazione di `faiss-gpu-cu12` unificata sotto CUDA 12, garantendo la perfetta convivenza tra NumPy 2.x e l'accelerazione hardware delle matrici di embedding.
 
-### 2.2 Fonte dei Dati: DisGeNET (Esteso) e Textualizzazione
+### 2.2 Fonte dei Dati: DisGeNET (Ingestion Locale) e Textualizzazione
 
-Il sistema si auto-costruisce interrogando e scaricando i Gold Standard *Curated* da **DisGeNET**:
-- **Gene-Disease Associations**: Relazioni validate tra geni e malattie.
-- **Variant-Disease Associations (VDAs)**: Relazioni validate tra varianti genetiche (es. SNPs) e patologie.
+Per garantire assoluta stabilità in ambienti cloud (come Google Colab) e aggirare i severi firewall anti-bot (es. Cloudflare) che bloccano i download automatizzati, il Ramo KB è stato re-ingegnerizzato per operare tramite un'**Ingestion Locale (Offline)**. 
 
-I dati tabellari TSV originali vengono scaricati (compressi in GZIP), decodificati in tempo reale e convertiti in **frasi strutturate di senso compiuto in inglese** (es. *"The gene BRCA1 is associated with the disease breast cancer..."*). Questo permette ai modelli semantici (Faiss e BM25) di "leggere" una Knowledge Base tabellare come se fosse un libro discorsivo.
+Il sistema legge il Gold Standard *Curated* direttamente dalla directory di progetto (`Disgenet/curated_gene_disease_associations.tsv`).
+I dati tabellari originali (relazioni validate tra geni e malattie) vengono decodificati in tempo reale e convertiti in **frasi strutturate di senso compiuto in inglese** (es. *"The gene BRCA1 is associated with the disease breast cancer with a score of 0.8..."*). Questo permette ai modelli semantici (Faiss e BM25) di "leggere" una Knowledge Base tabellare come se fosse un libro discorsivo.
 
 ### 2.3 Risoluzione del Type Mismatch FP16/FP32 in FAISS
 
@@ -78,11 +77,11 @@ A seconda dei parametri logici della query, il sistema devia il flusso informati
 
 Per prevenire i crash da *Out Of Memory* (OOM) sui classificatori finali a complessità quadratica $O(n^2)$ (come DeBERTa), è stato inserito un algoritmo di **Hard Truncation Dinamico**. Ogni chunk estratto dalla KB viene troncato rigidamente a un massimo di 500 caratteri utilizzando una funzione `rsplit` in corrispondenza dell'ultimo spazio vuoto, preservando la coerenza sintattica dello snippet ed eliminando il testo ridondante.
 
-### 2.5 Gestione Sicura della Cache e Controllo Integrità
+### 2.5 Gestione Sicura della Cache e Design Fail-Fast
 
-Per garantire la massima affidabilità ed evitare crash dovuti a file vettoriali corrotti, il modulo KB implementa un sistema di **Triplo Backup e Controllo d'Integrità**:
-- **Validazione Dimensionale**: Al caricamento, il sistema verifica che la dimensione degli indici BM25 (`corpus_size`) e FAISS (`ntotal`) coincida esattamente con il numero di documenti (geni e VDAs) effettivamente scaricati da DisGeNET.
-- **Fallback Automatico**: Se viene rilevato un indice obsoleto o corrotto (es. a causa di un'interruzione di corrente durante il salvataggio), il sistema lo scarta e passa automaticamente a uno dei file di backup. Se tutti i backup falliscono, la KB viene re-indicizzata da zero in tempo reale per garantire zero downtime.
+Per garantire la massima affidabilità, evitare crash da file vettoriali corrotti e mantenere l'integrità dei dati, il modulo KB implementa un rigoroso sistema di controlli:
+- **Triplo Backup e Validazione Dimensionale**: Al caricamento, il sistema verifica che la dimensione degli indici BM25 (`corpus_size`) e FAISS (`ntotal`) coincida esattamente con il numero di documenti effettivamente letti da DisGeNET. In caso di corruzione (es. da sbalzi di corrente), scarta la cache e passa ai file di backup secondari.
+- **Fail-Fast Integrato**: Se i file sorgente locali `.tsv` risultano mancanti e non è possibile generare la conoscenza di base da zero, il sistema rifiuta di partire con dati fittizi e lancia una `RuntimeError` bloccante, preservando in modo categorico la validità della *Data Provenance*.
 
 ---
 

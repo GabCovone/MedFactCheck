@@ -3,6 +3,7 @@ import os
 import sys
 import tempfile
 import uuid
+import base64
 
 # Configura il path in modo che trovi il modulo 'agent'
 src_path = os.path.abspath(os.path.join(os.path.dirname(__file__)))
@@ -27,13 +28,19 @@ async def verify_claim(text: str = Form(None), image: UploadFile = File(None)):
         raise HTTPException(status_code=400, detail="Devi fornire almeno un testo o un'immagine per la verifica.")
 
     image_path = None
+    image_b64 = None
     try:
         # Se è stata fornita un'immagine, la salviamo temporaneamente sul server
         if image and image.filename:
+            image_bytes = await image.read()
             file_ext = image.filename.split('.')[-1]
             with tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_ext}") as tmp_file:
-                tmp_file.write(await image.read())
+                tmp_file.write(image_bytes)
                 image_path = tmp_file.name
+                
+            b64_encoded = base64.b64encode(image_bytes).decode('utf-8')
+            mime_type = "image/jpeg" if file_ext.lower() in ["jpg", "jpeg"] else f"image/{file_ext.lower()}"
+            image_b64 = f"data:{mime_type};base64,{b64_encoded}"
 
         # Prepariamo lo State per LangGraph
         inputs = {
@@ -50,6 +57,7 @@ async def verify_claim(text: str = Form(None), image: UploadFile = File(None)):
             inputs["claim_input"]["text"] = text
         if image_path:
             inputs["claim_input"]["image"] = image_path
+            inputs["claim_input"]["image_b64"] = image_b64
 
         # Invocazione asincrona del Grafo
         config = {"configurable": {"thread_id": str(uuid.uuid4())}}

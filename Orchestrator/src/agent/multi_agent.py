@@ -69,6 +69,16 @@ class SupervisorAgent:
         if not claim_id and claim_text:
             claim_id = self.storage_instance.save_claim(original_text=claim_text)
             
+            # Salvataggio dell'immagine in MongoDB se presente
+            image_b64 = state.get("claim_input", {}).get("image_b64")
+            if claim_id and image_b64:
+                try:
+                    client = MongoClient(os.getenv("MONGO_URI", "mongodb://localhost:27017/"))
+                    db = client[os.getenv("MONGO_DB_NAME", "medfactcheck")]
+                    db["final_results"].update_one({"claim_id": claim_id}, {"$set": {"image_b64": image_b64}})
+                except Exception as e:
+                    print(f"[SUPERVISORE] Errore salvataggio immagine: {e}")
+                    
         if not claim_id:
             return ""
             

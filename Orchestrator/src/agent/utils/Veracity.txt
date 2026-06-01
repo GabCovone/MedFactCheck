@@ -1,0 +1,40 @@
+# ⚖️ Manuale d'Architettura: Veracity Assessment
+
+Il modulo di **Veracity** rappresenta l'ultimo stadio logico della pipeline di MedFactCheck. Il suo compito è emettere una sentenza definitiva (un'etichetta di classificazione) e un punteggio di confidenza per ogni sub-claim e, infine, calcolare in maniera deterministica il verdetto globale per il claim originale dell'utente.
+
+---
+
+## 🤖 1. Il Modello di Classificazione (Cross-Encoder NLI)
+
+Per questo compito discriminativo, il sistema abbandona l'approccio generativo (LLM) per appoggiarsi a un'architettura specializzata in **Natural Language Inference (NLI)**, nello specifico **DeBERTa-v3** (o varianti fine-tunizzate in ambito biomedico), caricata globalmente tramite Dependency Injection per ottimizzare la VRAM.
+
+I modelli Cross-Encoder calcolano l'allineamento semantico processando simultaneamente due sequenze di testo attraverso i layer di self-attention, restituendo logit probabilistici per tre classi fisse. Nel contesto di MedFactCheck, l'input è così strutturato:
+- **Premessa (Premise):** La concatenazione delle evidenze scientifiche recuperate dal Retriever e il Ragionamento Logico (Chain-of-Thought) generato dal Reasoner.
+- **Ipotesi (Hypothesis):** Il singolo sub-claim atomico da verificare.
+
+Questa architettura ibrida (LLM per il reasoning + Cross-Encoder per la classificazione) garantisce che il verdetto non sia soggetto alle tipiche allucinazioni generative, ma sia il risultato di un calcolo probabilistico rigoroso.
+
+---
+
+## 📊 2. Le Classi di Output e la Confidenza
+
+L'agente di Veracity classifica la relazione logica in una di queste tre categorie:
+- **Supported (Entailment):** Le evidenze e il ragionamento logico confermano pienamente e inequivocabilmente le affermazioni del sub-claim.
+- **Refuted (Contradiction):** Le evidenze smentiscono il sub-claim, oppure dimostrano che contiene esagerazioni critiche o palesi falsità mediche.
+- **Not Enough Information / NEI (Neutral):** I documenti recuperati non trattano l'argomento in modo diretto, non sono conclusivi, o non offrono prove statistiche sufficienti per confermare o smentire il claim in modo oggettivo.
+
+### Confidence Score (Calibrazione)
+Oltre all'etichetta categorica, il modello restituisce una probabilità matematica generata dall'applicazione della funzione Softmax sui logit finali (es. 0.98, ovvero 98%). Questo valore indica quanto il modello è "sicuro" della classificazione assegnata. La Dashboard sfrutta questo dato per filtrare o evidenziare risultati incerti, permettendo al clinico di valutare l'affidabilità della predizione.
+
+---
+
+## 🔄 3. Aggregazione del Verdetto Finale (Zero-Tolerance Policy)
+
+Poiché un claim utente complesso (es. *"L'aspirina cura il cancro e l'ibuprofene causa infarti"*) viene frammentato in molteplici sub-claims dal Decomposer, l'agente di Veracity deve sintetizzare un **verdetto globale** per la dashboard.
+
+La logica di aggregazione implementata non è una semplice media, ma segue regole cliniche conservative a "tolleranza zero":
+1. **Priorità alla Smentita:** Se *almeno un* sub-claim critico risulta **Refuted**, l'intero claim globale viene immediatamente etichettato come **Refuted**. Il razionale medico è che una notizia contenente anche solo una parziale falsità pericolosa deve essere scartata in toto.
+2. **Unanimità per il Supporto:** Se tutti i sub-claims risultano **Supported**, il claim globale è approvato come **Supported**.
+3. **Neutralità di Fallback:** In caso di mancanza di evidenze per parti cruciali del testo (NEI) miste a supporti parziali, il sistema propende precauzionalmente per **Not Enough Information**.
+
+Al termine dell'aggregazione, i risultati finali vengono passati al Supervisore che dichiara la fine del processo (`FINISH`), consentendo all'Orchestratore di salvare il documento finale in MongoDB e aggiornare l'interfaccia utente in tempo reale.
