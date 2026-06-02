@@ -10,7 +10,7 @@ Per garantire la massima flessibilità e scalabilità, l'orchestrazione non si b
 
 Per simulare in modo accurato un ambiente di produzione *Enterprise* (e permettere il testing ottimale su infrastrutture cloud), il sistema è stato ingegnerizzato separando nettamente il livello di presentazione dal motore di calcolo:
 
-1. **Server Back-End (`api.py` / Orchestrator)**: Un server asincrono ad alte prestazioni basato su **FastAPI** e `uvicorn`. Ha il monopolio esclusivo sull'hardware. Rimane in ascolto sul path `/verify` accettando richieste HTTP POST asincrone contenenti payload testuali e/o buffer di immagini mediche (`UploadFile`), salvandole temporaneamente in totale sicurezza.
+1. **Server Back-End (`api.py` / Orchestrator)**: Un server asincrono ad alte prestazioni basato su **FastAPI** e `uvicorn`. Ha il monopolio esclusivo sull'hardware (allocazione VRAM di Qwen e DeBERTa, caricamento degli indici FAISS, modelli di inferenza). Rimane in ascolto sul path `/verify` accettando richieste HTTP POST asincrone contenenti payload testuali e buffer di immagini multimediali (`UploadFile`).
 2. **Client Front-End (`Dashboard.py`)**: Un'interfaccia ultra-leggera in Streamlit che delega il carico computazionale all'API tramite chiamate `requests.post`, interrogando poi localmente MongoDB per renderizzare le metriche e i risultati in tempo reale.
 
 Questo disaccoppiamento risponde direttamente ai requisiti di **Scalabilità**: il server può scalare verticalmente o orizzontalmente indipendentemente dal numero di dashboard connesse, elaborando dozzine di *request* concorrenti senza bloccare l'interfaccia utente.

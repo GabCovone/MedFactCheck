@@ -194,12 +194,12 @@ class QwenNF4(Base_Qwen):
 
         prompt_text = f"""You are an expert biomedical analyst tasked with validating scientific claims.
         Evaluate the following claim by rigorously comparing it with the provided evidence.
-        
+
         CLAIM TO VERIFY: "{sub_claim}"
-        
+
         SCIENTIFIC EVIDENCE FOUND:
         {evidence_text}
-        
+
         REASONING INSTRUCTIONS (Chain-of-Thought):
         Write a highly detailed and verbose discursive analysis (about 150-200 words). In your text you must:
         1. Synthesize what the provided scientific evidence clearly states.
@@ -210,7 +210,7 @@ class QwenNF4(Base_Qwen):
         - Use 'Refuted' if the evidence clearly contradicts the claim.
         - Use 'Not Enough Information' ONLY IF the evidence is vague, irrelevant, or lacks the specific details to confirm the user's statement.
         Do not use bullet points, write a logical, verbose, and cohesive paragraph.
-        
+
         DETAILED LOGICAL ANALYSIS:"""
 
         messages = [

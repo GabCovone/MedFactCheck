@@ -72,6 +72,9 @@ def load_scifact_dataset(num_samples=10):
         # Leggiamo tutte le righe valide
         lines = [line.strip() for line in f if line.strip()]
         
+    # --- MODIFICA CRITICA: Seed crittografico fisso ---
+    # Questo garantisce che l'estrazione casuale dei claim sia sempre identica
+    random.seed(42)
     random.shuffle(lines)
     
     # 3. Parsing del dataset (Estrazione claim e vera etichetta)
